@@ -31,7 +31,7 @@ const workTag = (e) => (e.lab_rate_cents == null ? ''
 router.get('/', (req, res) => {
   const status = ['pending', 'approved', 'paid', 'all'].includes(req.query.status) ? req.query.status : 'pending';
   const open = all(
-    `SELECT e.*, u.name, u.avatar, u.lab_rate_cents FROM time_entries e JOIN users u ON u.id = e.user_id
+    `SELECT e.*, u.name, u.avatar, u.hourly_rate_cents, u.lab_rate_cents FROM time_entries e JOIN users u ON u.id = e.user_id
      WHERE e.clock_out IS NULL ORDER BY e.clock_in`,
   );
   const entries = all(
@@ -40,10 +40,13 @@ router.get('/', (req, res) => {
     status, status,
   );
 
-  const openRows = open.map((e) => [
-    person(e.name, e.avatar) + workTag(e), esc(fmtDateTime(e.clock_in)),
-    esc(fmtMinutes(Math.max(0, Math.floor((now() - e.clock_in) / 60)))), `<a href="/admin/entries/${e.id}/edit">Edit</a>`,
-  ]);
+  const openRows = open.map((e) => {
+    const soFar = Math.max(0, Math.floor((now() - e.clock_in) / 60));
+    return [
+      person(e.name, e.avatar) + workTag(e), esc(fmtDateTime(e.clock_in)), esc(fmtMinutes(soFar)),
+      esc(money(payCents(soFar, entryRate(e)))), `<a href="/admin/entries/${e.id}/edit">Edit</a>`,
+    ];
+  });
   const rows = entries.map((e) => {
     const minutes = entryMinutes(e);
     const actions = [];
@@ -64,7 +67,7 @@ router.get('/', (req, res) => {
 
   res.send(page(req, 'Timesheets', `
 <h2>On the clock now</h2>
-${table(['Worker', 'Since', 'So far', ''], openRows, 'Nobody is clocked in.')}
+${table(['Worker', 'Since', 'So far', 'Earned', ''], openRows, 'Nobody is clocked in.')}
 <h2>Shifts</h2>
 <div class="toolbar">
   <div class="tabs">${tabs}</div>
