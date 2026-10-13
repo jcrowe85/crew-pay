@@ -6,19 +6,30 @@ const { all, run } = require('./db');
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const enabled = Boolean(stripe);
 
+// Stripe treats each worker as a small business and would ask for the website of what they sell.
+// Describing the work for them answers that, so its form skips the question.
+const BUSINESS_PROFILE = { mcc: '7299', product_description: 'Paid for hourly work.' };
+
 async function onboardingLink(user, baseUrl) {
   let accountId = user.stripe_account_id;
   if (!accountId) {
+    const [first, ...rest] = user.name.trim().split(/\s+/);
     const account = await stripe.accounts.create({
       type: 'express',
       country: 'US',
       email: user.email,
       business_type: 'individual',
+      business_profile: BUSINESS_PROFILE,
+      // Saves typing; they can correct any of it in Stripe's form.
+      individual: { first_name: first, ...(rest.length ? { last_name: rest.join(' ') } : {}), email: user.email },
       capabilities: { transfers: { requested: true } },
       metadata: { crewpay_user_id: String(user.id) },
     });
     accountId = account.id;
     run('UPDATE users SET stripe_account_id = ? WHERE id = ?', accountId, user.id);
+  } else if (!user.payout_submitted) {
+    // Accounts started before the description was filled in. Stripe may refuse once the form is done; that is fine.
+    await stripe.accounts.update(accountId, { business_profile: BUSINESS_PROFILE }).catch(() => {});
   }
   const link = await stripe.accountLinks.create({
     account: accountId,
