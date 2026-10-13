@@ -25,6 +25,9 @@ async function onboardingLink(user, baseUrl) {
     refresh_url: `${baseUrl}/payouts/refresh`,
     return_url: `${baseUrl}/payouts/return`,
     type: 'account_onboarding',
+    // Ask for everything Stripe will want (date of birth, last four of the SSN) in one visit,
+    // rather than only what it needs today and a second request later.
+    collection_options: { fields: 'eventually_due' },
   });
   return link.url;
 }
