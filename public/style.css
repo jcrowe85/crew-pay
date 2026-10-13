@@ -267,6 +267,21 @@ input.pin { width: 200px; padding: 12px; text-align: center; font-size: 34px; le
 .keypad button { padding: 0; height: 68px; font-size: 26px; font-weight: 500; border-radius: 16px; touch-action: manipulation; }
 .keypad button[data-key="clear"] { font-size: 15px; color: var(--muted); }
 .kiosk-done { margin: 0 0 18px; }
+body.auth.bare main { padding: 12px 20px; }
+body.auth.bare .card { margin: 0; padding: 22px 28px; }
+body.auth.bare h1 { text-align: center; margin-bottom: 14px; }
+body.auth.bare .flash { margin-bottom: 14px; }
+/* Short screens (a tablet on its side): the name sits beside a small avatar and the keys shrink so the whole pad shows. */
+@media (max-height: 820px) {
+  body.auth.bare .pin-who { flex-direction: row; justify-content: center; margin-bottom: 12px; }
+  body.auth.bare .pin-who .avatar { width: 44px; height: 44px; font-size: 16px; }
+  body.auth.bare .pin-form { gap: 12px; }
+  body.auth.bare input.pin { padding: 7px; font-size: 28px; }
+  body.auth.bare .keypad { gap: 8px; }
+  body.auth.bare .keypad button { height: 54px; font-size: 23px; }
+  body.auth.bare .keypad button[data-key="clear"] { font-size: 15px; }
+  body.auth.bare .back { margin-top: 12px; }
+}
 
 /* ---------- Narrower screens ---------- */
 @media (max-width: 1180px) {

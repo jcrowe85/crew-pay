@@ -58,7 +58,7 @@ router.get('/:id', (req, res) => {
 <input class="pin" type="password" name="pin" inputmode="numeric" pattern="\\d{4}" maxlength="4" required autocomplete="off" aria-label="Your 4-digit PIN">
 <div class="keypad">${KEYS.map((k) => `<button type="button" class="secondary" data-key="${k}">${KEY_LABELS[k] || k}</button>`).join('')}</div>
 </form>
-<p class="back"><a href="${url}?forgot">Forgot your PIN?</a></p>${back}`, { idle: 45 }));
+<p class="back"><a href="${url}?forgot">Forgot your PIN?</a> · <a href="/login">Not you?</a></p>`, { idle: 45, bare: true }));
 });
 
 router.post('/:id', (req, res) => {

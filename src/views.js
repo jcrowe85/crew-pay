@@ -58,8 +58,9 @@ function nav(req) {
 }
 
 // opts.lead: escaped HTML under the title. opts.action: HTML shown to the right of the title.
-// Logged-out pages: opts.wide gives the full-width layout, opts.idle returns to /login after that many idle seconds.
-function page(req, title, body, { lead = '', action = '', wide = false, idle = 0 } = {}) {
+// Logged-out pages: opts.wide gives the full-width layout, opts.idle returns to /login after that many idle seconds,
+// opts.bare leaves out the logo and tagline so a tall form fits a tablet screen.
+function page(req, title, body, { lead = '', action = '', wide = false, idle = 0, bare = false } = {}) {
   const user = req.user;
   const msg = req.query?.msg
     ? `<p class="flash ${req.query.err ? 'error' : ''}" role="status">${esc(req.query.msg)}</p>`
@@ -80,15 +81,15 @@ function page(req, title, body, { lead = '', action = '', wide = false, idle = 0
 
   if (!user) {
     return `${head}
-<body class="auth${wide ? ' wide' : ''}"${idle ? ` data-idle="${idle}"` : ''}>
+<body class="auth${wide ? ' wide' : ''}${bare ? ' bare' : ''}"${idle ? ` data-idle="${idle}"` : ''}>
 <main>
-  <div class="brand big">${LOGO}<span>Crew Pay</span></div>
+  ${bare ? '' : `<div class="brand big">${LOGO}<span>Crew Pay</span></div>`}
   <section class="card">
     <h1>${esc(title)}</h1>
     ${msg}
     ${body}
   </section>
-  <p class="muted small">Time tracking and pay for your crew.</p>
+  ${bare ? '' : '<p class="muted small">Time tracking and pay for your crew.</p>'}
 </main>
 </body>
 </html>`;
