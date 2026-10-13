@@ -157,6 +157,10 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 if (require.main === module) {
   const port = Number(process.env.PORT) || 3000;
   app.listen(port, () => console.log(`Crew Pay running at http://localhost:${port}`));
+  // Bank pulls take days to land, so look in on them every ten minutes.
+  const { checkFunding } = require('./src/payout');
+  setInterval(() => checkFunding().catch((err) => console.error(err)), 10 * 60 * 1000).unref();
+  checkFunding().catch((err) => console.error(err));
 }
 
 module.exports = app;

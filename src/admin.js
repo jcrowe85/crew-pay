@@ -2,6 +2,9 @@ const express = require('express');
 const { get, all, run, tx } = require('./db');
 const payments = require('./payments');
 const mailer = require('./mailer');
+const {
+  runItems, markItemPaid, sending, sendRun, pendingTopup, payableCents, pullFunds, stopAutoSend, checkFunding,
+} = require('./payout');
 const { requireAdmin, hashPassword, tempPassword } = require('./auth');
 const { csrf, page, badge, table, person, stat, icon } = require('./views');
 const {
@@ -394,12 +397,8 @@ router.post('/payruns', (req, res) => {
   res.redirect(`/admin/payruns/${runId}`);
 });
 
-const runItems = (runId) => all(
-  `SELECT i.*, u.name, u.avatar, u.email, u.stripe_account_id, u.payouts_enabled
-   FROM pay_run_items i JOIN users u ON u.id = i.user_id WHERE i.pay_run_id = ? ORDER BY u.name`, runId,
-);
-
 router.get('/payruns/:id', async (req, res) => {
+  if (pendingTopup(req.params.id)) await checkFunding();
   const payRun = get('SELECT * FROM pay_runs WHERE id = ?', req.params.id);
   if (!payRun) return go(res, '/admin/payruns', 'No such pay run.', true);
   const items = runItems(payRun.id);
@@ -417,21 +416,37 @@ router.get('/payruns/:id', async (req, res) => {
   ]);
 
   let sendPanel = '';
-  if (unpaid.length && payments.enabled) {
+  const pull = pendingTopup(payRun.id);
+  const note = payRun.funding_note ? `<p class="flash${/Nothing was sent|could not/.test(payRun.funding_note) ? ' error' : ''}" role="status">${esc(payRun.funding_note)}</p>` : '';
+  if (unpaid.length && pull) {
+    sendPanel = `<section class="card">
+<h2>${esc(money(pull.amount_cents))} is on its way from your bank</h2>
+<p>Started ${esc(fmtDate(pull.created_at))}${pull.expected_at ? `, expected by <strong>${esc(fmtDate(pull.expected_at))}</strong>` : ''}.
+${payRun.auto_send
+    ? 'Payments are sent automatically as soon as it lands. Nothing more to do.'
+    : 'Automatic sending is off, so come back and send the payments once it lands.'}</p>
+${payRun.auto_send ? `<p class="actions">${post(req, `/admin/payruns/${payRun.id}/hold`, 'Do not send automatically', 'link')}</p>` : ''}
+</section>`;
+  } else if (unpaid.length && payments.enabled) {
     let balanceLine = '';
+    let short = 0;
     try {
       const balance = await payments.availableBalanceCents();
-      balanceLine = `<p>Stripe balance available: <strong>${esc(money(balance))}</strong>${
-        balance < unpaidTotal ? ' <span class="error">Not enough to cover this run. Add funds in Stripe first.</span>' : ''}</p>`;
+      short = Math.max(0, payableCents(payRun.id) - balance);
+      balanceLine = `<p>Stripe balance available: <strong>${esc(money(balance))}</strong>.${!short ? ''
+        : payments.autoTopup
+          ? ` That is ${esc(money(short))} short, so confirming pulls <strong>${esc(money(short))}</strong> from your bank. It takes a few business days, and payments go out by themselves when it lands.`
+          : ' <span class="error">Not enough to cover this run. Add funds in Stripe first.</span>'}</p>`;
     } catch (err) {
       balanceLine = `<p class="error">Could not read the Stripe balance: ${esc(err.message)}</p>`;
     }
+    const pulling = short > 0 && payments.autoTopup;
     sendPanel = `<section class="card">
 <h2>Send ${esc(money(unpaidTotal))} to ${unpaid.length} ${unpaid.length === 1 ? 'person' : 'people'}</h2>
 ${balanceLine}
 <form method="post" action="/admin/payruns/${payRun.id}/pay" class="stack">${csrf(req)}
 <label>Type PAY to confirm<input name="confirm" autocomplete="off" required pattern="PAY"></label>
-<button class="danger">Send payments</button>
+<button class="danger">${pulling ? 'Pull funds and send' : 'Send payments'}</button>
 </form>
 <p class="muted small">Payments cannot be pulled back once sent. Anyone without direct deposit set up is skipped.</p>
 </section>`;
@@ -447,6 +462,7 @@ ${stat({ label: 'Period', value: esc(fmtRange(payRun.period_start, payRun.period
 ${stat({ label: 'Status', value: badge(payRun.status), hint: unpaid.length ? `${unpaid.length} still to pay` : 'Everyone is paid', iconName: 'check', tone: 'green' })}
 ${stat({ label: 'Total', value: esc(money(total)), hint: unpaid.length ? `${esc(money(unpaidTotal))} outstanding` : 'Nothing outstanding', iconName: 'wallet', tone: 'violet' })}
 </section>
+${note}
 ${table(['Worker', 'Time', 'Rate', 'Amount', 'Status', 'Payment', ''], rows)}
 ${sendPanel}
 <p class="actions">
@@ -455,25 +471,6 @@ ${sendPanel}
 </p>`));
 });
 
-function markItemPaid(item, method, transferId) {
-  tx(() => {
-    run(
-      "UPDATE pay_run_items SET status = 'paid', method = ?, stripe_transfer_id = ?, error = NULL, paid_at = ? WHERE id = ?",
-      method, transferId, now(), item.id,
-    );
-    run("UPDATE time_entries SET status = 'paid' WHERE pay_run_id = ? AND user_id = ?", item.pay_run_id, item.user_id);
-    const left = get("SELECT COUNT(*) AS n FROM pay_run_items WHERE pay_run_id = ? AND status != 'paid'", item.pay_run_id).n;
-    run('UPDATE pay_runs SET status = ? WHERE id = ?', left ? 'partial' : 'paid', item.pay_run_id);
-  });
-}
-
-const failItem = (item, message, countAttempt) => run(
-  "UPDATE pay_run_items SET status = 'failed', error = ?, attempts = attempts + ? WHERE id = ?",
-  String(message).slice(0, 300), countAttempt ? 1 : 0, item.id,
-);
-
-const sending = new Set(); // pay runs with a send in progress in this process
-
 router.post('/payruns/:id/pay', async (req, res) => {
   const payRun = get('SELECT * FROM pay_runs WHERE id = ?', req.params.id);
   if (!payRun) return go(res, '/admin/payruns', 'No such pay run.', true);
@@ -481,36 +478,37 @@ router.post('/payruns/:id/pay', async (req, res) => {
   if (!payments.enabled) return go(res, back, 'Stripe is not connected.', true);
   if (req.body.confirm !== 'PAY') return go(res, back, 'Type PAY to confirm.', true);
   if (sending.has(payRun.id)) return go(res, back, 'This pay run is already being sent.', true);
+  if (pendingTopup(payRun.id)) return go(res, back, 'A bank pull for this pay run is already on its way.', true);
 
-  sending.add(payRun.id);
-  let sent = 0;
-  let skipped = 0;
-  try {
-    for (const item of runItems(payRun.id).filter((i) => i.status !== 'paid')) {
-      let transfer;
-      try {
-        const ready = item.stripe_account_id
-          && await payments.refreshStatus({ id: item.user_id, stripe_account_id: item.stripe_account_id });
-        if (!ready) {
-          failItem(item, 'Direct deposit is not set up for this person.', false);
-          skipped += 1;
-          continue;
-        }
-        transfer = await payments.sendTransfer({ runId: payRun.id, item, accountId: item.stripe_account_id });
-      } catch (err) {
-        failItem(item, err.message, payments.isDefinitiveFailure(err));
-        skipped += 1;
-        continue;
-      }
-      // Outside the try: if recording fails after money moved, the retry must reuse the same
-      // idempotency key, so the attempt counter is left alone.
-      markItemPaid(item, 'stripe', transfer.id);
-      sent += 1;
+  if (payments.autoTopup) {
+    // Short of funds: pull the difference from the bank, and send once it lands.
+    let short;
+    try {
+      short = payableCents(payRun.id) - await payments.availableBalanceCents();
+    } catch (err) {
+      return go(res, back, `Could not read the Stripe balance: ${err.message}`, true);
     }
-  } finally {
-    sending.delete(payRun.id);
+    if (short > 0) {
+      try {
+        const topup = await pullFunds(payRun.id, short);
+        const when = topup.expected_availability_date ? ` It should arrive by ${fmtDate(topup.expected_availability_date)}.` : '';
+        return go(res, back, `Pulling ${money(short)} from your bank.${when} Payments go out automatically when it lands.`);
+      } catch (err) {
+        return go(res, back, `The bank pull could not be started: ${err.message}`, true);
+      }
+    }
   }
-  go(res, back, `Sent ${sent} payment(s)${skipped ? `, ${skipped} not sent (see below)` : ''}.`, skipped > 0);
+
+  const result = await sendRun(payRun.id);
+  if (!result) return go(res, back, 'This pay run is already being sent.', true);
+  stopAutoSend(payRun.id, null);
+  go(res, back, `Sent ${result.sent} payment(s)${result.skipped ? `, ${result.skipped} not sent (see below)` : ''}.`, result.skipped > 0);
+});
+
+// Keeps the money that is on its way but leaves sending to a person.
+router.post('/payruns/:id/hold', (req, res) => {
+  stopAutoSend(req.params.id, 'Automatic sending was switched off. Send the payments yourself once the funds arrive.');
+  go(res, `/admin/payruns/${req.params.id}`, 'Payments will not be sent automatically.');
 });
 
 router.post('/payruns/:id/items/:itemId/mark-paid', (req, res) => {
@@ -525,6 +523,7 @@ router.post('/payruns/:id/items/:itemId/mark-paid', (req, res) => {
 router.post('/payruns/:id/delete', (req, res) => {
   const id = Number(req.params.id);
   if (sending.has(id)) return go(res, `/admin/payruns/${id}`, 'This pay run is being sent right now.', true);
+  if (pendingTopup(id)) return go(res, `/admin/payruns/${id}`, 'A bank pull for this pay run is on its way, so it cannot be cancelled.', true);
   const deleted = tx(() => {
     if (get("SELECT 1 FROM pay_run_items WHERE pay_run_id = ? AND status = 'paid'", id)) return false;
     run('UPDATE time_entries SET pay_run_id = NULL WHERE pay_run_id = ?', id);

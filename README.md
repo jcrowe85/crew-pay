@@ -42,6 +42,13 @@ Start with a test key (`sk_test_...`) and run one full pay period before switchi
 Workers need to reach it from their phones, so host it somewhere with HTTPS and a persistent disk for
 `data/`. Set `TRUST_PROXY=1` behind an HTTPS proxy so login cookies are marked secure.
 
+## Automatic bank pulls
+
+With `STRIPE_AUTO_TOPUP=1`, confirming a pay run that the Stripe balance cannot cover pulls the difference from the bank
+account saved in Stripe (an ACH debit that takes a few business days). The pay run then waits, and the payments are sent
+automatically when the money lands; the app checks every ten minutes. If the balance already covers the run, nothing is
+pulled and payments go out straight away. A failed pull sends nothing and is reported on the pay run page.
+
 ## Welcome emails
 
 When `RESEND_API_KEY` and `EMAIL_FROM` are set in `.env`, adding a worker or admin emails them their username and a

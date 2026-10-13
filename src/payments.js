@@ -62,6 +62,28 @@ async function availableBalanceCents() {
   return balance.available.filter((b) => b.currency === 'usd').reduce((sum, b) => sum + b.amount, 0);
 }
 
+// With STRIPE_AUTO_TOPUP=1 a pay run that the balance cannot cover pulls the difference from the bank.
+const autoTopup = enabled && process.env.STRIPE_AUTO_TOPUP === '1';
+
+// An ACH pull from the bank account saved in Stripe (Balance > Add funds). It takes a few business days to land.
+function createTopup({ runId, amountCents, attempt }) {
+  return stripe.topups.create(
+    {
+      amount: amountCents,
+      currency: 'usd',
+      description: `Crew Pay run #${runId}`,
+      statement_descriptor: `Pay run ${runId}`.slice(0, 15),
+      metadata: { pay_run_id: String(runId) },
+      // Only needed in a sandbox, where there is no saved bank account (for example btok_us_verified).
+      ...(process.env.STRIPE_TOPUP_SOURCE ? { source: process.env.STRIPE_TOPUP_SOURCE } : {}),
+    },
+    { idempotencyKey: `crewpay-run${runId}-topup${attempt}` },
+  );
+}
+
+const retrieveTopup = (id) => stripe.topups.retrieve(id);
+
 module.exports = {
-  enabled, onboardingLink, refreshStatus, sendTransfer, isDefinitiveFailure, availableBalanceCents,
+  enabled, autoTopup, onboardingLink, refreshStatus, sendTransfer, isDefinitiveFailure, availableBalanceCents,
+  createTopup, retrieveTopup,
 };

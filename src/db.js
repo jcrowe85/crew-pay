@@ -72,10 +72,29 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS entries_by_status ON time_entries(status, clock_in);
 `);
 
-// Columns added after the first release.
-if (!db.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name = 'avatar'").get()) {
-  db.exec('ALTER TABLE users ADD COLUMN avatar TEXT');
+// Columns and tables added after the first release.
+function addColumn(table, column, definition) {
+  if (!db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ?`).get(column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 }
+addColumn('users', 'avatar', 'TEXT');
+// auto_send: an admin confirmed this run and it goes out as soon as the bank pull lands.
+addColumn('pay_runs', 'auto_send', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('pay_runs', 'funding_note', 'TEXT');
+db.exec(`
+  -- Money pulled from the business bank account into the Stripe balance to cover a pay run.
+  CREATE TABLE IF NOT EXISTS topups (
+    id INTEGER PRIMARY KEY,
+    pay_run_id INTEGER REFERENCES pay_runs(id) ON DELETE SET NULL,
+    stripe_id TEXT NOT NULL UNIQUE,
+    amount_cents INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    expected_at INTEGER,
+    error TEXT,
+    created_at INTEGER NOT NULL
+  );
+`);
 
 const get = (sql, ...params) => db.prepare(sql).get(...params);
 const all = (sql, ...params) => db.prepare(sql).all(...params);

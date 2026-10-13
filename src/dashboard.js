@@ -102,7 +102,7 @@ function accountCard() {
 <div class="card-head"><span class="label">${icon('bank')} Payment account</span></div>
 <h3>Stripe payouts</h3>
 ${payments.enabled
-    ? '<p class="state ok">Connected</p>'
+    ? `<p class="state ok">Connected</p><p class="muted small">${payments.autoTopup ? 'Pay runs pull any shortfall from your bank automatically.' : 'Automatic bank pulls are off. Fund the Stripe balance before each pay run.'}</p>`
     : '<p class="state off">Not connected</p><p class="muted small">Payments are recorded by hand until a Stripe key is added.</p>'}
 </section>`;
 }
