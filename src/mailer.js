@@ -66,4 +66,15 @@ ${isWorker ? '<p style="margin:0 0 20px;line-height:1.5">The attached PDF, <b>Ho
   return send(message);
 }
 
-module.exports = { enabled, sendWelcome };
+// The day's database copy, for safekeeping outside the server.
+function sendBackup({ to, day, filename, content, workers, shifts, open }) {
+  const text = `Crew Pay backup for ${day}.
+
+The attached file is a full copy of the Crew Pay database: ${workers} active workers and ${shifts} shifts${open ? `, ${open} still on the clock` : ''}.
+It holds names, hours and pay amounts. Bank details are held by Stripe and are not in it.
+
+Keep this email. You only need the file if the server's own data is ever lost; the README explains how to restore it.`;
+  return send({ to, subject: `Crew Pay backup: ${day}`, text, attachments: [{ filename, content }] });
+}
+
+module.exports = { enabled, sendWelcome, sendBackup };

@@ -179,8 +179,14 @@ if (require.main === module) {
   const { checkFunding } = require('./src/payout');
   const { refreshAllWaiting } = require('./src/payments');
   const lookIn = () => checkFunding().then(refreshAllWaiting).catch((err) => console.error(err));
-  setInterval(lookIn, 10 * 60 * 1000).unref();
-  lookIn();
+  // And makes the day's backup, once, the first time it runs after midnight.
+  const backup = require('./src/backup');
+  const everyTen = () => {
+    lookIn();
+    backup.daily().catch((err) => console.error(`Backup failed: ${err.message}`));
+  };
+  setInterval(everyTen, 10 * 60 * 1000).unref();
+  everyTen();
 }
 
 module.exports = app;

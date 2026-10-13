@@ -1,7 +1,9 @@
+const fs = require('node:fs');
 const express = require('express');
 const { get, all, run, tx } = require('./db');
 const payments = require('./payments');
 const mailer = require('./mailer');
+const backup = require('./backup');
 const {
   runItems, markItemPaid, sending, sendRun, pendingTopup, payableCents, pullFunds, stopAutoSend, checkFunding,
 } = require('./payout');
@@ -195,6 +197,18 @@ ${others > 0 ? post(req, '/admin/kiosk/off-all', `Turn off ${others} other kiosk
 </section>`;
 }
 
+function backupCard() {
+  const b = backup.status();
+  const last = b.latest
+    ? `The latest is from ${esc(fmtDate(fromInputValue(`${b.latest}T12:00`)))}${b.emailedTo ? `, emailed to ${esc(b.emailedTo)}` : mailer.enabled ? ', not emailed yet' : ''}. ${b.count} ${b.count === 1 ? 'copy is' : 'copies are'} kept on the server.`
+    : 'No copy has been made yet; the first is made within ten minutes of the app starting.';
+  return `<section class="card split">
+<div><h2>Backups</h2>
+<p class="muted">A copy of all hours, workers and pay runs is made every day${mailer.enabled ? ' and emailed to the admins' : ''}. ${last}</p></div>
+<div class="actions"><a class="button secondary" href="/admin/backup.db">Download a copy now</a></div>
+</section>`;
+}
+
 function peoplePage(req, role, notice = '') {
   const isAdmin = role === 'admin';
   const users = all('SELECT * FROM users WHERE role = ? ORDER BY active DESC, name', role);
@@ -207,7 +221,7 @@ function peoplePage(req, role, notice = '') {
   return page(req, isAdmin ? 'Admins' : 'Workers', `
 ${notice}
 ${table(headers, rows, isAdmin ? 'No admins yet.' : 'No workers yet. Use the Add worker button to add the first one.')}
-${isAdmin ? '' : kioskCard(req)}
+${isAdmin ? backupCard() : kioskCard(req)}
 <dialog id="add-person" class="modal" aria-labelledby="add-person-title">
 <form method="post" action="${listUrl(role)}" class="stack">${csrf(req)}
 <div class="modal-head"><h2 id="add-person-title">${isAdmin ? 'Add an admin' : 'Add a worker'}</h2>
@@ -250,6 +264,11 @@ ${passwordNotice(person.name, person.email, password)}`;
 }
 
 router.get('/workers', (req, res) => res.send(peoplePage(req, 'worker')));
+
+router.get('/backup.db', (req, res) => {
+  const copy = backup.fresh();
+  res.download(copy, `crewpay-${backup.today()}.db`, () => fs.rm(copy, { force: true }, () => {}));
+});
 
 router.post('/kiosk/on', (req, res) => {
   if (!req.kiosk) registerKiosk(req, res);

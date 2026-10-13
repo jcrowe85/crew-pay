@@ -17,6 +17,14 @@ npm start
 Open http://localhost:3000. The first visit creates the admin account, so do that before sharing the address.
 Data lives in `data/crewpay.db` (SQLite). Back that file up.
 
+## Backups
+
+Every day the app saves a copy of the database in `data/backups/` (the newest 14 are kept) and, when email is set up,
+sends it to the admins. Admins can also download a copy at any time from the Admins page.
+
+To restore one: stop the app, replace `data/crewpay.db` with the copy (delete any `crewpay.db-wal` and `crewpay.db-shm`
+next to it), and start the app again. Everyone logs in again afterwards; passwords and PINs are unchanged.
+
 ## How a pay period works
 
 1. Workers clock in and out. A forgotten clock-out shows under "On the clock now"; edit the shift to close it.

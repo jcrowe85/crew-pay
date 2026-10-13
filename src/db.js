@@ -125,4 +125,4 @@ function tx(fn) {
   }
 }
 
-module.exports = { db, get, all, run, tx };
+module.exports = { db, file, get, all, run, tx };
