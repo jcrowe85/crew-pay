@@ -21,6 +21,12 @@ function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(actual, expected);
 }
 
+// For logging in: a password pasted from the welcome email often carries a stray space or line break.
+function matchesLogin(typed, stored) {
+  const trimmed = typed.trim();
+  return verifyPassword(typed, stored) || (trimmed !== typed && verifyPassword(trimmed, stored));
+}
+
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const randomToken = (bytes = 32) => crypto.randomBytes(bytes).toString('hex');
 
@@ -146,6 +152,6 @@ function loginFailed(ip) {
 const loginSucceeded = (ip) => failures.delete(ip);
 
 module.exports = {
-  MIN_PASSWORD, hashPassword, verifyPassword, tempPassword, startSession, endSession,
+  MIN_PASSWORD, hashPassword, verifyPassword, matchesLogin, tempPassword, startSession, endSession,
   registerKiosk, unregisterKiosk, unregisterOtherKiosks, loadUser, checkCsrf, requireLogin, requireAdmin, requirePassword, loginBlocked, loginFailed, loginSucceeded,
 };

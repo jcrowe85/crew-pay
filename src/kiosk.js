@@ -70,7 +70,7 @@ router.post('/:id', (req, res) => {
     // Choosing or replacing a PIN takes the password.
     const retry = `${url}?forgot`;
     if (auth.loginBlocked(req.ip)) return go(res, retry, 'Too many attempts. Try again in 15 minutes.', true);
-    if (!auth.verifyPassword(String(req.body.password), w.password_hash)) {
+    if (!auth.matchesLogin(String(req.body.password), w.password_hash)) {
       auth.loginFailed(req.ip);
       return go(res, retry, 'Wrong password. An admin can reset it for you.', true);
     }

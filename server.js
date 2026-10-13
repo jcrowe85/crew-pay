@@ -83,7 +83,7 @@ app.post('/login', (req, res) => {
   if (auth.loginBlocked(req.ip)) return go(res, '/login', 'Too many attempts. Try again in 15 minutes.', true);
   const email = String(req.body.email || '').trim().toLowerCase();
   const user = get('SELECT * FROM users WHERE email = ? AND active = 1', email);
-  if (!user || !auth.verifyPassword(String(req.body.password || ''), user.password_hash)) {
+  if (!user || !auth.matchesLogin(String(req.body.password || ''), user.password_hash)) {
     auth.loginFailed(req.ip);
     return go(res, `/login?email=${encodeURIComponent(email)}`, 'Wrong email or password.', true);
   }
