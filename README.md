@@ -62,6 +62,9 @@ and password login on the worker's own phone. Five wrong PINs clears the PIN unt
 one. Resetting someone's password clears their PIN too. To shut out a lost tablet, open Workers
 on any other device and choose "Turn off other kiosks".
 
+On the tablet, open the site in Chrome (or Safari on an iPad) and choose "Add to Home screen". Opened from that icon
+the app fills the screen, with no address bar or tabs.
+
 ## Welcome emails
 
 When `RESEND_API_KEY` and `EMAIL_FROM` are set in `.env`, adding a worker or admin emails them their username and a
