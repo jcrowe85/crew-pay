@@ -41,7 +41,8 @@ router.get('/', (req, res) => {
   );
 
   const openRows = open.map((e) => [
-    person(e.name, e.avatar) + workTag(e), esc(fmtDateTime(e.clock_in)), `<a href="/admin/entries/${e.id}/edit">Edit</a>`,
+    person(e.name, e.avatar) + workTag(e), esc(fmtDateTime(e.clock_in)),
+    esc(fmtMinutes(Math.max(0, Math.floor((now() - e.clock_in) / 60)))), `<a href="/admin/entries/${e.id}/edit">Edit</a>`,
   ]);
   const rows = entries.map((e) => {
     const minutes = entryMinutes(e);
@@ -63,7 +64,7 @@ router.get('/', (req, res) => {
 
   res.send(page(req, 'Timesheets', `
 <h2>On the clock now</h2>
-${table(['Worker', 'Since', ''], openRows, 'Nobody is clocked in.')}
+${table(['Worker', 'Since', 'So far', ''], openRows, 'Nobody is clocked in.')}
 <h2>Shifts</h2>
 <div class="toolbar">
   <div class="tabs">${tabs}</div>

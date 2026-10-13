@@ -131,7 +131,16 @@ function dashboard(req, res) {
   const owedCents = owed.reduce((sum, o) => sum + splitPay(o.minutes, o.hourly_rate_cents, o.lab_minutes, o.lab_rate_cents), 0);
   const pending = get(`SELECT COUNT(*) AS n, COALESCE(SUM(${MINUTES}), 0) AS minutes FROM time_entries e WHERE e.status = 'pending' AND e.clock_out IS NOT NULL`);
   const paid = get("SELECT COALESCE(SUM(amount_cents), 0) AS cents, COUNT(*) AS n FROM pay_run_items WHERE status = 'paid' AND paid_at >= ?", now() - 30 * 86400);
-  const onClock = get('SELECT COUNT(*) AS n FROM time_entries WHERE clock_out IS NULL').n;
+  const clockedIn = all(
+    `SELECT e.id, e.clock_in, e.lab, u.name, u.avatar, u.lab_rate_cents FROM time_entries e JOIN users u ON u.id = e.user_id
+     WHERE e.clock_out IS NULL ORDER BY e.clock_in`,
+  );
+  const onClock = clockedIn.length;
+  const clockedInRows = clockedIn.map((e) => [
+    person(e.name, e.avatar) + (e.lab_rate_cents == null ? '' : ` <span class="badge ${e.lab ? 'lab' : 'other'}">${e.lab ? 'Lab' : 'Other'}</span>`),
+    esc(fmtDateTime(e.clock_in)), esc(fmtMinutes(Math.max(0, Math.floor((now() - e.clock_in) / 60)))),
+    `<a href="/admin/entries/${e.id}/edit">Edit</a>`,
+  ]);
   const workers = get("SELECT COUNT(*) AS n FROM users WHERE active = 1 AND role = 'worker'").n;
 
   const weeks = hoursByWeek();
@@ -154,6 +163,10 @@ ${stat({ label: 'On the clock now', value: String(onClock), hint: `of ${workers}
 
 <div class="dash">
   <div class="dash-main">
+    <section class="card flush">
+      <div class="card-head"><h2>On the clock now</h2><span class="chip-note">${onClock} of ${workers}</span></div>
+      ${table(['Worker', 'Since', 'So far', ''], clockedInRows, 'Nobody is clocked in.')}
+    </section>
     <section class="card">
       <div class="card-head"><div><span class="muted small">All workers</span><h2>Hours by week</h2></div>
       <span class="chip-note">${esc(fmtMinutes(totalMinutes))} in ${WEEKS} weeks</span></div>
