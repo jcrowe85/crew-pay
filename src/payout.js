@@ -4,7 +4,7 @@ const payments = require('./payments');
 const { money, fmtDate, now } = require('./util');
 
 const runItems = (runId) => all(
-  `SELECT i.*, u.name, u.avatar, u.email, u.stripe_account_id, u.payouts_enabled
+  `SELECT i.*, u.name, u.avatar, u.email, u.stripe_account_id, u.payouts_enabled, u.payout_submitted
    FROM pay_run_items i JOIN users u ON u.id = i.user_id WHERE i.pay_run_id = ? ORDER BY u.name`, runId,
 );
 

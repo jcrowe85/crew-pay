@@ -15,10 +15,17 @@ const baseUrl = (req) => process.env.BASE_URL || `${req.protocol}://${req.get('h
 function payoutPanel(req) {
   const u = req.user;
   if (!payments.enabled || u.payouts_enabled) return '';
-  if (req.session.kiosk) {
+  if (req.session.kiosk && !u.payout_submitted) {
     return `<section class="card warn">
 <h2>Set up direct deposit</h2>
 <p>To be paid, add your bank details from your own phone: open ${esc(baseUrl(req).replace(/^https?:\/\//, ''))} and log in with your email and password.</p>
+</section>`;
+  }
+  if (u.payout_submitted) {
+    return `<section class="card warn split">
+<div><h2>Direct deposit is being checked</h2>
+<p>Stripe has your bank details and is checking them. There is nothing more for you to do; this notice goes away when you are ready to be paid.</p></div>
+${req.session.kiosk ? '' : `<form method="post" action="/payouts/onboard">${csrf(req)}<button class="secondary">Review my details</button></form>`}
 </section>`;
   }
   return `<section class="card warn split">
@@ -29,8 +36,11 @@ function payoutPanel(req) {
 </section>`;
 }
 
-router.get('/clock', (req, res) => {
+router.get('/clock', async (req, res) => {
   const u = req.user;
+  // Picks up Stripe's approval without the person having to do anything.
+  if (await payments.refreshIfWaiting(u)) u.payouts_enabled = 1;
+  else if (u.stripe_account_id && !u.payouts_enabled) u.payout_submitted = get('SELECT payout_submitted FROM users WHERE id = ?', u.id).payout_submitted;
   const open = get('SELECT * FROM time_entries WHERE user_id = ? AND clock_out IS NULL', u.id);
   const unpaid = all(
     "SELECT * FROM time_entries WHERE user_id = ? AND clock_out IS NOT NULL AND status != 'paid'", u.id,
@@ -132,7 +142,9 @@ router.post('/payouts/onboard', requirePassword, async (req, res) => {
 router.get('/payouts/return', async (req, res) => {
   if (!payments.enabled) return res.redirect('/clock');
   const ready = await payments.refreshStatus(req.user);
-  go(res, '/clock', ready ? 'Direct deposit is set up.' : 'Bank setup is not finished yet.', !ready);
+  if (ready) return go(res, '/clock', 'Direct deposit is set up.');
+  const { payout_submitted: submitted } = get('SELECT payout_submitted FROM users WHERE id = ?', req.user.id);
+  go(res, '/clock', submitted ? 'Stripe has your details and is checking them. Nothing more to do.' : 'Bank setup is not finished yet.', !submitted);
 });
 
 router.get('/payouts/refresh', (req, res) => go(res, '/clock', 'That link expired. Start bank setup again.', true));

@@ -176,6 +176,7 @@ const listUrl = (role) => (role === 'admin' ? '/admin/admins' : '/admin/workers'
 
 function payoutStatus(u) {
   if (u.payouts_enabled) return badge('ready');
+  if (u.payout_submitted) return '<span class="badge pending" title="They finished the form; Stripe is checking their details.">Stripe checking</span>';
   return u.stripe_account_id ? badge('incomplete') : '<span class="muted">not set up</span>';
 }
 

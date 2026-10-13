@@ -175,9 +175,12 @@ if (require.main === module) {
   const port = Number(process.env.PORT) || 3000;
   app.listen(port, () => console.log(`Crew Pay running at http://localhost:${port}`));
   // Bank pulls take days to land, so look in on them every ten minutes.
+  // The same visit re-checks anyone waiting on Stripe to approve their bank details.
   const { checkFunding } = require('./src/payout');
-  setInterval(() => checkFunding().catch((err) => console.error(err)), 10 * 60 * 1000).unref();
-  checkFunding().catch((err) => console.error(err));
+  const { refreshAllWaiting } = require('./src/payments');
+  const lookIn = () => checkFunding().then(refreshAllWaiting).catch((err) => console.error(err));
+  setInterval(lookIn, 10 * 60 * 1000).unref();
+  lookIn();
 }
 
 module.exports = app;

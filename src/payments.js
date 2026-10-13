@@ -1,7 +1,7 @@
 // Contractor payouts through Stripe Connect. The business funds its Stripe balance from its
 // bank account; each contractor enters their own bank details with Stripe, never with us.
 const Stripe = require('stripe');
-const { run } = require('./db');
+const { all, run } = require('./db');
 
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const enabled = Boolean(stripe);
@@ -34,8 +34,32 @@ async function refreshStatus(user) {
   if (!user.stripe_account_id) return false;
   const account = await stripe.accounts.retrieve(user.stripe_account_id);
   const ready = Boolean(account.payouts_enabled && account.capabilities?.transfers === 'active');
-  run('UPDATE users SET payouts_enabled = ? WHERE id = ?', ready ? 1 : 0, user.id);
+  // Form finished with nothing left to supply: what remains is Stripe's own checking.
+  const submitted = Boolean(account.details_submitted && !account.requirements?.currently_due?.length);
+  run('UPDATE users SET payouts_enabled = ?, payout_submitted = ? WHERE id = ?', ready ? 1 : 0, submitted ? 1 : 0, user.id);
   return ready;
+}
+
+// Stripe can take minutes or days to approve someone after they finish its form, so anyone still
+// waiting is looked up again from time to time.
+const lastCheck = new Map();
+async function refreshIfWaiting(user, everySeconds = 30) {
+  if (!stripe || !user.stripe_account_id || user.payouts_enabled) return Boolean(user.payouts_enabled);
+  if (Date.now() - (lastCheck.get(user.id) || 0) < everySeconds * 1000) return false;
+  lastCheck.set(user.id, Date.now());
+  try {
+    return await refreshStatus(user);
+  } catch (err) {
+    console.error(`Checking Stripe account for user ${user.id} failed: ${err.message}`);
+    return false;
+  }
+}
+
+async function refreshAllWaiting() {
+  if (!stripe) return;
+  for (const user of all('SELECT id, stripe_account_id, payouts_enabled FROM users WHERE stripe_account_id IS NOT NULL AND payouts_enabled = 0 AND active = 1')) {
+    await refreshIfWaiting(user, 0);
+  }
 }
 
 function sendTransfer({ runId, item, accountId }) {
@@ -84,6 +108,6 @@ function createTopup({ runId, amountCents, attempt }) {
 const retrieveTopup = (id) => stripe.topups.retrieve(id);
 
 module.exports = {
-  enabled, autoTopup, onboardingLink, refreshStatus, sendTransfer, isDefinitiveFailure, availableBalanceCents,
+  enabled, autoTopup, onboardingLink, refreshStatus, refreshIfWaiting, refreshAllWaiting, sendTransfer, isDefinitiveFailure, availableBalanceCents,
   createTopup, retrieveTopup,
 };
