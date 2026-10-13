@@ -44,6 +44,20 @@ function fromInputValue(v) {
 const entryMinutes = (e) => (e.clock_out ? Math.max(0, Math.round((e.clock_out - e.clock_in) / 60)) : 0);
 const payCents = (minutes, rateCents) => Math.round((minutes * rateCents) / 60);
 
+// Lab work is paid at the worker's lab rate, when they have one. These take a shift or a worker's
+// totals joined with the worker's two rates.
+const entryRate = (e) => (e.lab && e.lab_rate_cents != null ? e.lab_rate_cents : e.hourly_rate_cents);
+const splitPay = (minutes, rateCents, labMinutes, labRateCents) =>
+  payCents(minutes - labMinutes, rateCents) + payCents(labMinutes, labRateCents || 0);
+// "$30.00", or "2h 00m lab at $80.00 + 3h 00m at $30.00" when both rates were worked.
+function rateText(minutes, rateCents, labMinutes, labRateCents) {
+  if (!labMinutes) return money(rateCents);
+  const lab = `${fmtMinutes(labMinutes)} lab at ${money(labRateCents)}`;
+  return labMinutes === minutes ? lab : `${lab} + ${fmtMinutes(minutes - labMinutes)} at ${money(rateCents)}`;
+}
+// SQL for the minutes of a shift (e) that are paid at the worker's (u) lab rate.
+const LAB_MINUTES = 'CASE WHEN e.lab = 1 AND u.lab_rate_cents IS NOT NULL THEN CAST(ROUND((e.clock_out - e.clock_in) / 60.0) AS INTEGER) ELSE 0 END';
+
 // "18.50" -> 1850. Returns null for anything that isn't a sane dollar amount.
 function parseDollars(v) {
   if (!/^\d{1,5}(\.\d{1,2})?$/.test(String(v || '').trim())) return null;
@@ -58,5 +72,5 @@ function go(res, url, msg, isError) {
 
 module.exports = {
   esc, money, fmtMinutes, fmtDateTime, fmtDate, fmtRange, now, toInputValue, fromInputValue,
-  entryMinutes, payCents, parseDollars, go,
+  entryMinutes, payCents, entryRate, splitPay, rateText, LAB_MINUTES, parseDollars, go,
 };

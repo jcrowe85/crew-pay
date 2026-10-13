@@ -88,6 +88,12 @@ addColumn('users', 'payout_submitted', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('users', 'pin_hash', 'TEXT');
 addColumn('users', 'pin_fails', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('sessions', 'kiosk', 'INTEGER NOT NULL DEFAULT 0');
+// A worker with a lab rate is paid it for shifts marked as lab work and their normal rate for the rest.
+addColumn('users', 'lab_rate_cents', 'INTEGER');
+addColumn('time_entries', 'lab', 'INTEGER NOT NULL DEFAULT 0');
+// How much of a pay run item's minutes were lab work, and the rate they were paid at.
+addColumn('pay_run_items', 'lab_minutes', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('pay_run_items', 'lab_rate_cents', 'INTEGER');
 db.exec(`
   -- Devices an admin has set up as a crew kiosk. The id is the hash of the device's cookie.
   CREATE TABLE IF NOT EXISTS kiosks (

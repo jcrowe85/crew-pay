@@ -2,7 +2,7 @@
 const { get, all } = require('./db');
 const payments = require('./payments');
 const { page, badge, table, person, stat, icon } = require('./views');
-const { esc, money, fmtMinutes, fmtDateTime, fmtRange, now, entryMinutes, payCents } = require('./util');
+const { esc, money, fmtMinutes, fmtDateTime, fmtRange, now, entryMinutes, payCents, entryRate, splitPay, LAB_MINUTES } = require('./util');
 
 const WEEKS = 12;
 const MINUTES = 'CAST(ROUND((e.clock_out - e.clock_in) / 60.0) AS INTEGER)';
@@ -125,10 +125,10 @@ function lastRunCard() {
 
 function dashboard(req, res) {
   const owed = all(
-    `SELECT u.hourly_rate_cents, SUM(${MINUTES}) AS minutes FROM time_entries e JOIN users u ON u.id = e.user_id
+    `SELECT u.hourly_rate_cents, u.lab_rate_cents, SUM(${MINUTES}) AS minutes, SUM(${LAB_MINUTES}) AS lab_minutes FROM time_entries e JOIN users u ON u.id = e.user_id
      WHERE e.status = 'approved' AND e.pay_run_id IS NULL AND e.clock_out IS NOT NULL GROUP BY u.id`,
   );
-  const owedCents = owed.reduce((sum, o) => sum + payCents(o.minutes, o.hourly_rate_cents), 0);
+  const owedCents = owed.reduce((sum, o) => sum + splitPay(o.minutes, o.hourly_rate_cents, o.lab_minutes, o.lab_rate_cents), 0);
   const pending = get(`SELECT COUNT(*) AS n, COALESCE(SUM(${MINUTES}), 0) AS minutes FROM time_entries e WHERE e.status = 'pending' AND e.clock_out IS NOT NULL`);
   const paid = get("SELECT COALESCE(SUM(amount_cents), 0) AS cents, COUNT(*) AS n FROM pay_run_items WHERE status = 'paid' AND paid_at >= ?", now() - 30 * 86400);
   const onClock = get('SELECT COUNT(*) AS n FROM time_entries WHERE clock_out IS NULL').n;
@@ -137,11 +137,11 @@ function dashboard(req, res) {
   const weeks = hoursByWeek();
   const totalMinutes = weeks.reduce((sum, w) => sum + w.minutes, 0);
   const recent = all(
-    `SELECT e.*, u.name, u.avatar, u.hourly_rate_cents FROM time_entries e JOIN users u ON u.id = e.user_id
+    `SELECT e.*, u.name, u.avatar, u.hourly_rate_cents, u.lab_rate_cents FROM time_entries e JOIN users u ON u.id = e.user_id
      WHERE e.clock_out IS NOT NULL ORDER BY e.clock_in DESC LIMIT 6`,
   ).map((e) => {
     const minutes = entryMinutes(e);
-    return [person(e.name, e.avatar), esc(fmtDateTime(e.clock_in)), esc(fmtMinutes(minutes)), esc(money(payCents(minutes, e.hourly_rate_cents))), badge(e.status)];
+    return [person(e.name, e.avatar), esc(fmtDateTime(e.clock_in)), esc(fmtMinutes(minutes)), esc(money(payCents(minutes, entryRate(e)))), badge(e.status)];
   });
 
   res.send(page(req, `Hi, ${req.user.name.split(' ')[0]}`, `

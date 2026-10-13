@@ -11,7 +11,7 @@ const { requireAdmin, hashPassword, tempPassword, registerKiosk, unregisterKiosk
 const { csrf, page, badge, table, person, stat, icon } = require('./views');
 const {
   esc, money, fmtMinutes, fmtDateTime, fmtDate, fmtRange, now, toInputValue, fromInputValue,
-  entryMinutes, payCents, parseDollars, go,
+  entryMinutes, payCents, entryRate, splitPay, rateText, LAB_MINUTES, parseDollars, go,
 } = require('./util');
 
 const router = express.Router();
@@ -24,20 +24,24 @@ const post = (req, action, label, cls = 'link') =>
 
 /* ---------- Timesheets ---------- */
 
+// Shifts of someone with a lab rate show which kind of work they were, since it decides the rate.
+const workTag = (e) => (e.lab_rate_cents == null ? ''
+  : ` <span class="badge ${e.lab ? 'lab' : 'other'}" title="Paid at ${esc(money(entryRate(e)))}/hr">${e.lab ? 'Lab' : 'Other'}</span>`);
+
 router.get('/', (req, res) => {
   const status = ['pending', 'approved', 'paid', 'all'].includes(req.query.status) ? req.query.status : 'pending';
   const open = all(
-    `SELECT e.*, u.name, u.avatar FROM time_entries e JOIN users u ON u.id = e.user_id
+    `SELECT e.*, u.name, u.avatar, u.lab_rate_cents FROM time_entries e JOIN users u ON u.id = e.user_id
      WHERE e.clock_out IS NULL ORDER BY e.clock_in`,
   );
   const entries = all(
-    `SELECT e.*, u.name, u.avatar, u.hourly_rate_cents FROM time_entries e JOIN users u ON u.id = e.user_id
+    `SELECT e.*, u.name, u.avatar, u.hourly_rate_cents, u.lab_rate_cents FROM time_entries e JOIN users u ON u.id = e.user_id
      WHERE e.clock_out IS NOT NULL AND (? = 'all' OR e.status = ?) ORDER BY e.clock_in DESC LIMIT 300`,
     status, status,
   );
 
   const openRows = open.map((e) => [
-    person(e.name, e.avatar), esc(fmtDateTime(e.clock_in)), `<a href="/admin/entries/${e.id}/edit">Edit</a>`,
+    person(e.name, e.avatar) + workTag(e), esc(fmtDateTime(e.clock_in)), `<a href="/admin/entries/${e.id}/edit">Edit</a>`,
   ]);
   const rows = entries.map((e) => {
     const minutes = entryMinutes(e);
@@ -50,8 +54,8 @@ router.get('/', (req, res) => {
       actions.push(`<a href="/admin/payruns/${e.pay_run_id}">Pay run #${e.pay_run_id}</a>`);
     }
     return [
-      person(e.name, e.avatar), esc(fmtDateTime(e.clock_in)), esc(fmtDateTime(e.clock_out)), esc(fmtMinutes(minutes)),
-      esc(money(payCents(minutes, e.hourly_rate_cents))), badge(e.status), esc(e.note), actions.join(' '),
+      person(e.name, e.avatar) + workTag(e), esc(fmtDateTime(e.clock_in)), esc(fmtDateTime(e.clock_out)), esc(fmtMinutes(minutes)),
+      esc(money(payCents(minutes, entryRate(e)))), badge(e.status), esc(e.note), actions.join(' '),
     ];
   });
   const tabs = ['pending', 'approved', 'paid', 'all']
@@ -91,11 +95,18 @@ function entryForm(req, entry, workers) {
   const workerField = isNew
     ? `<label>Worker<select name="user_id" required>${workers.map((w) => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select></label>`
     : `<p><strong>${esc(entry.name)}</strong></p>`;
+  // Only people with a lab rate have two kinds of work.
+  const twoRate = isNew ? workers.filter((w) => w.lab_rate_cents != null) : (entry.lab_rate_cents != null ? [entry] : []);
+  const workField = twoRate.length ? `<label>Type of work${isNew ? ` (${esc(twoRate.map((w) => w.name).join(', '))} only)` : ''}<select name="lab">
+<option value="0">Other work${isNew ? '' : ` (${esc(money(entry.hourly_rate_cents))}/hr)`}</option>
+<option value="1"${entry.lab ? ' selected' : ''}>Lab work${isNew ? '' : ` (${esc(money(entry.lab_rate_cents))}/hr)`}</option>
+</select></label>` : '';
   return `<form method="post" action="${isNew ? '/admin/entries' : `/admin/entries/${entry.id}/edit`}" class="stack">
 ${csrf(req)}
 ${workerField}
 <label>Clock in<input type="datetime-local" name="clock_in" value="${esc(toInputValue(entry.clock_in))}" required></label>
 <label>Clock out<input type="datetime-local" name="clock_out" value="${esc(toInputValue(entry.clock_out))}"></label>
+${workField}
 <label>Note<input name="note" maxlength="200" value="${esc(entry.note)}"></label>
 <div class="row"><button>Save</button><a href="/admin">Cancel</a></div>
 </form>
@@ -113,10 +124,13 @@ function readEntryForm(body) {
   return { clockIn, clockOut, note: String(body.note || '').trim().slice(0, 200) || null };
 }
 
+// 1 for lab work. Only someone with a lab rate can have a lab shift.
+const labChoice = (body, worker) => (worker.lab_rate_cents != null && body.lab === '1' ? 1 : 0);
+
 const isOpenClash = (err) => String(err.message).includes('UNIQUE');
 
 router.get('/entries/new', (req, res) => {
-  const workers = all("SELECT id, name FROM users WHERE active = 1 AND role = 'worker' ORDER BY name");
+  const workers = all("SELECT id, name, lab_rate_cents FROM users WHERE active = 1 AND role = 'worker' ORDER BY name");
   if (!workers.length) return go(res, '/admin/workers', 'Add a worker first.', true);
   res.send(page(req, 'Add a shift', entryForm(req, {}, workers)));
 });
@@ -124,12 +138,12 @@ router.get('/entries/new', (req, res) => {
 router.post('/entries', (req, res) => {
   const form = readEntryForm(req.body);
   if (typeof form === 'string') return go(res, '/admin/entries/new', form, true);
-  const worker = get('SELECT id FROM users WHERE id = ?', req.body.user_id);
+  const worker = get('SELECT id, lab_rate_cents FROM users WHERE id = ?', req.body.user_id);
   if (!worker) return go(res, '/admin/entries/new', 'Pick a worker.', true);
   try {
     run(
-      'INSERT INTO time_entries (user_id, clock_in, clock_out, note, edited_by) VALUES (?, ?, ?, ?, ?)',
-      worker.id, form.clockIn, form.clockOut, form.note, req.user.id,
+      'INSERT INTO time_entries (user_id, clock_in, clock_out, note, lab, edited_by) VALUES (?, ?, ?, ?, ?, ?)',
+      worker.id, form.clockIn, form.clockOut, form.note, labChoice(req.body, worker), req.user.id,
     );
   } catch (err) {
     if (isOpenClash(err)) return go(res, '/admin/entries/new', 'That worker is already clocked in.', true);
@@ -139,7 +153,7 @@ router.post('/entries', (req, res) => {
 });
 
 const editableEntry = (id) =>
-  get('SELECT e.*, u.name FROM time_entries e JOIN users u ON u.id = e.user_id WHERE e.id = ? AND e.pay_run_id IS NULL', id);
+  get('SELECT e.*, u.name, u.hourly_rate_cents, u.lab_rate_cents FROM time_entries e JOIN users u ON u.id = e.user_id WHERE e.id = ? AND e.pay_run_id IS NULL', id);
 
 router.get('/entries/:id/edit', (req, res) => {
   const entry = editableEntry(req.params.id);
@@ -156,8 +170,8 @@ router.post('/entries/:id/edit', (req, res) => {
   const status = form.clockOut ? entry.status : 'pending';
   try {
     run(
-      'UPDATE time_entries SET clock_in = ?, clock_out = ?, note = ?, status = ?, edited_by = ? WHERE id = ?',
-      form.clockIn, form.clockOut, form.note, status, req.user.id, entry.id,
+      'UPDATE time_entries SET clock_in = ?, clock_out = ?, note = ?, lab = ?, status = ?, edited_by = ? WHERE id = ?',
+      form.clockIn, form.clockOut, form.note, labChoice(req.body, entry), status, req.user.id, entry.id,
     );
   } catch (err) {
     if (isOpenClash(err)) return go(res, `/admin/entries/${entry.id}/edit`, 'That worker is already clocked in on another shift.', true);
@@ -214,7 +228,7 @@ function peoplePage(req, role, notice = '') {
   const users = all('SELECT * FROM users WHERE role = ? ORDER BY active DESC, name', role);
   const rows = users.map((u) => [
     `<a href="${listUrl(role)}/${u.id}">${person(u.name, u.avatar)}</a>`, esc(u.email),
-    ...(isAdmin ? [] : [`${esc(money(u.hourly_rate_cents))}/hr`, payoutStatus(u)]),
+    ...(isAdmin ? [] : [`${esc(money(u.hourly_rate_cents))}/hr${u.lab_rate_cents == null ? '' : `<br><small class="muted">Lab ${esc(money(u.lab_rate_cents))}/hr</small>`}`, payoutStatus(u)]),
     u.active ? 'Active' : '<span class="muted">Inactive</span>',
   ]);
   const headers = isAdmin ? ['Name', 'Email', 'Status'] : ['Name', 'Email', 'Rate', 'Direct deposit', 'Status'];
@@ -284,7 +298,8 @@ router.post('/kiosk/off-all', (req, res) => {
 });
 router.get('/admins', (req, res) => res.send(peoplePage(req, 'admin')));
 
-// Returns { name, email, rate } or a string describing what is wrong. Only workers have a rate.
+// Returns { name, email, rate, labRate } or a string describing what is wrong. Only workers have rates,
+// and the lab rate is left empty (null) for everyone paid a single rate.
 function readPersonForm(body, withRate) {
   const name = String(body.name || '').trim().slice(0, 100);
   const email = String(body.email || '').trim().toLowerCase().slice(0, 200);
@@ -292,7 +307,10 @@ function readPersonForm(body, withRate) {
   if (!name) return 'Enter a name.';
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return 'Enter a valid email.';
   if (rate === null) return 'Enter the hourly rate as dollars, like 20 or 18.50.';
-  return { name, email, rate };
+  const labText = String(body.lab_rate || '').trim();
+  const labRate = withRate && labText ? parseDollars(labText) : null;
+  if (labText && labRate === null) return 'Enter the lab rate as dollars, like 80, or leave it empty.';
+  return { name, email, rate, labRate };
 }
 
 function addPerson(role) {
@@ -327,7 +345,8 @@ router.get(['/workers/:id', '/admins/:id'], (req, res) => {
 <label>Name<input name="name" required maxlength="100" value="${esc(u.name)}"></label>
 <label>Email<input type="email" name="email" required maxlength="200" value="${esc(u.email)}"></label>
 ${isAdmin ? '' : `<label>Hourly rate ($)<input name="rate" inputmode="decimal" required value="${(u.hourly_rate_cents / 100).toFixed(2)}"></label>
-<p class="muted small">A new rate applies to pay runs created from now on.</p>`}
+<label>Lab rate ($), only for someone paid differently for lab work<input name="lab_rate" inputmode="decimal" placeholder="Leave empty for one rate" value="${u.lab_rate_cents == null ? '' : (u.lab_rate_cents / 100).toFixed(2)}"></label>
+<p class="muted small">With a lab rate, they choose “lab work” or “other work” each time they clock in, and you can change it on a shift before approving it. A new rate applies to pay runs created from now on.</p>`}
 <label class="check"><input type="checkbox" name="active" ${u.active ? 'checked' : ''} ${self ? 'disabled' : ''}> Active (can log in)</label>
 <div class="row"><button>Save</button><a href="${listUrl(u.role)}">Cancel</a></div>
 </form>
@@ -347,8 +366,9 @@ router.post(['/workers/:id', '/admins/:id'], (req, res) => {
   // Admins cannot deactivate themselves, so there is always a way back in.
   const active = u.id === req.user.id || req.body.active ? 1 : 0;
   const rate = u.role === 'worker' ? form.rate : u.hourly_rate_cents;
-  run('UPDATE users SET name = ?, email = ?, hourly_rate_cents = ?, active = ? WHERE id = ?',
-    form.name, form.email, rate, active, u.id);
+  const labRate = u.role === 'worker' ? form.labRate : u.lab_rate_cents;
+  run('UPDATE users SET name = ?, email = ?, hourly_rate_cents = ?, lab_rate_cents = ?, active = ? WHERE id = ?',
+    form.name, form.email, rate, labRate, active, u.id);
   if (!active) run('DELETE FROM sessions WHERE user_id = ?', u.id);
   go(res, listUrl(u.role), 'Saved.');
 });
@@ -376,12 +396,13 @@ router.post(['/workers/:id/reset-password', '/admins/:id/reset-password'], (req,
 /* ---------- Pay runs ---------- */
 
 const owedByWorker = (through) => all(
-  `SELECT u.id, u.name, u.avatar, u.hourly_rate_cents, MIN(e.clock_in) AS first_in,
-          SUM(CAST(ROUND((e.clock_out - e.clock_in) / 60.0) AS INTEGER)) AS minutes
+  `SELECT u.id, u.name, u.avatar, u.hourly_rate_cents, u.lab_rate_cents, MIN(e.clock_in) AS first_in,
+          SUM(CAST(ROUND((e.clock_out - e.clock_in) / 60.0) AS INTEGER)) AS minutes, SUM(${LAB_MINUTES}) AS lab_minutes
    FROM time_entries e JOIN users u ON u.id = e.user_id
    WHERE e.status = 'approved' AND e.pay_run_id IS NULL AND e.clock_out <= ?
    GROUP BY u.id ORDER BY u.name`, through,
 );
+const owedCents = (o) => splitPay(o.minutes, o.hourly_rate_cents, o.lab_minutes, o.lab_rate_cents);
 
 function endOfDay(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return null;
@@ -391,10 +412,10 @@ function endOfDay(value) {
 
 router.get('/payruns', (req, res) => {
   const owed = owedByWorker(now());
-  const total = owed.reduce((sum, o) => sum + payCents(o.minutes, o.hourly_rate_cents), 0);
+  const total = owed.reduce((sum, o) => sum + owedCents(o), 0);
   const owedRows = owed.map((o) => [
-    person(o.name, o.avatar), esc(fmtMinutes(o.minutes)), esc(money(o.hourly_rate_cents)),
-    esc(money(payCents(o.minutes, o.hourly_rate_cents))),
+    person(o.name, o.avatar), esc(fmtMinutes(o.minutes)), esc(rateText(o.minutes, o.hourly_rate_cents, o.lab_minutes, o.lab_rate_cents)),
+    esc(money(owedCents(o))),
   ]);
   const runs = all(
     `SELECT r.*, COUNT(i.id) AS people, COALESCE(SUM(i.amount_cents), 0) AS total
@@ -433,8 +454,9 @@ router.post('/payruns', (req, res) => {
     ).lastInsertRowid;
     for (const o of owed) {
       run(
-        'INSERT INTO pay_run_items (pay_run_id, user_id, minutes, rate_cents, amount_cents) VALUES (?, ?, ?, ?, ?)',
-        id, o.id, o.minutes, o.hourly_rate_cents, payCents(o.minutes, o.hourly_rate_cents),
+        `INSERT INTO pay_run_items (pay_run_id, user_id, minutes, rate_cents, lab_minutes, lab_rate_cents, amount_cents)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        id, o.id, o.minutes, o.hourly_rate_cents, o.lab_minutes, o.lab_minutes ? o.lab_rate_cents : null, owedCents(o),
       );
     }
     run(
@@ -457,7 +479,7 @@ router.get('/payruns/:id', async (req, res) => {
   const total = items.reduce((sum, i) => sum + i.amount_cents, 0);
 
   const rows = items.map((i) => [
-    person(i.name, i.avatar), esc(fmtMinutes(i.minutes)), esc(money(i.rate_cents)), esc(money(i.amount_cents)),
+    person(i.name, i.avatar), esc(fmtMinutes(i.minutes)), esc(rateText(i.minutes, i.rate_cents, i.lab_minutes, i.lab_rate_cents)), esc(money(i.amount_cents)),
     badge(i.status) + (i.error ? `<br><small class="error">${esc(i.error)}</small>` : ''),
     i.status === 'paid'
       ? `${esc(i.method)}${i.stripe_transfer_id ? ` <small>${esc(i.stripe_transfer_id)}</small>` : ''}`
@@ -592,10 +614,11 @@ const csvCell = (v) => {
 router.get('/payruns/:id/export.csv', (req, res) => {
   const payRun = get('SELECT * FROM pay_runs WHERE id = ?', req.params.id);
   if (!payRun) return res.status(404).send('No such pay run.');
-  const lines = [['Name', 'Email', 'Hours', 'Rate', 'Amount', 'Status', 'Method', 'Transfer', 'Paid on']];
+  const lines = [['Name', 'Email', 'Hours', 'Rate', 'Lab hours', 'Lab rate', 'Amount', 'Status', 'Method', 'Transfer', 'Paid on']];
   for (const i of runItems(payRun.id)) {
     lines.push([
-      i.name, i.email, (i.minutes / 60).toFixed(2), (i.rate_cents / 100).toFixed(2), (i.amount_cents / 100).toFixed(2),
+      i.name, i.email, ((i.minutes - i.lab_minutes) / 60).toFixed(2), (i.rate_cents / 100).toFixed(2),
+      i.lab_minutes ? (i.lab_minutes / 60).toFixed(2) : '', i.lab_minutes ? (i.lab_rate_cents / 100).toFixed(2) : '', (i.amount_cents / 100).toFixed(2),
       i.status, i.method, i.stripe_transfer_id, i.paid_at ? new Date(i.paid_at * 1000).toISOString().slice(0, 10) : '',
     ]);
   }

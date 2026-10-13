@@ -35,6 +35,13 @@ next to it), and start the app again. Everyone logs in again afterwards; passwor
 
 To change a shift that is already in a pay run, cancel the run first. A run cannot be cancelled once anyone in it is paid.
 
+## Two rates for one worker
+
+For someone paid more for lab work, open their page under Workers and fill in "Lab rate" next to their normal hourly
+rate. They then get two buttons when clocking in, "Start lab work" and "Start other work", and switch by clocking out
+and back in. Timesheets marks each of their shifts Lab or Other; edit a shift to change it before approving. A pay run
+adds both up into one payment. Workers without a lab rate see no difference.
+
 ## Connecting Stripe
 
 1. Create a Stripe account for the business and turn on Connect (Express accounts).
