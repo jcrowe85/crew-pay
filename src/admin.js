@@ -229,7 +229,7 @@ function peoplePage(req, role, notice = '') {
   const rows = users.map((u) => [
     `<a href="${listUrl(role)}/${u.id}">${person(u.name, u.avatar)}</a>`, esc(u.email),
     ...(isAdmin ? [] : [`${esc(money(u.hourly_rate_cents))}/hr${u.lab_rate_cents == null ? '' : `<br><small class="muted">Lab ${esc(money(u.lab_rate_cents))}/hr</small>`}`, payoutStatus(u)]),
-    u.active ? 'Active' : '<span class="muted">Inactive</span>',
+    (u.active ? 'Active' : '<span class="muted">Inactive</span>') + (!isAdmin && u.tablet_only ? '<br><small class="muted">Tablet only</small>' : ''),
   ]);
   const headers = isAdmin ? ['Name', 'Email', 'Status'] : ['Name', 'Email', 'Rate', 'Direct deposit', 'Status'];
   return page(req, isAdmin ? 'Admins' : 'Workers', `
@@ -242,7 +242,8 @@ ${isAdmin ? backupCard() : kioskCard(req)}
 <button type="button" class="ghost" data-close-dialog aria-label="Close">${icon('close')}</button></div>
 <label>Name<input name="name" required maxlength="100" autofocus></label>
 <label>Email<input type="email" name="email" required maxlength="200"></label>
-${isAdmin ? '' : '<label>Hourly rate ($)<input name="rate" inputmode="decimal" placeholder="20.00" required></label>'}
+${isAdmin ? '' : `<label>Hourly rate ($)<input name="rate" inputmode="decimal" placeholder="20.00" required></label>
+<label class="check"><input type="checkbox" name="tablet_only"${get('SELECT 1 FROM kiosks LIMIT 1') ? ' checked' : ''}> Can only clock in and out on the crew tablet</label>`}
 <p class="muted small">${mailer.enabled
     ? `They get a welcome email with their username and a temporary password${isAdmin ? '' : ', plus a picture guide to logging hours'}.`
     : 'Their temporary password is shown on screen once for you to pass along.'}</p>
@@ -310,7 +311,7 @@ function readPersonForm(body, withRate) {
   const labText = String(body.lab_rate || '').trim();
   const labRate = withRate && labText ? parseDollars(labText) : null;
   if (labText && labRate === null) return 'Enter the lab rate as dollars, like 80, or leave it empty.';
-  return { name, email, rate, labRate };
+  return { name, email, rate, labRate, tabletOnly: withRate && body.tablet_only ? 1 : 0 };
 }
 
 function addPerson(role) {
@@ -322,9 +323,9 @@ function addPerson(role) {
     }
     const password = tempPassword();
     run(
-      `INSERT INTO users (email, name, password_hash, role, hourly_rate_cents, must_change_password, created_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?)`,
-      form.email, form.name, hashPassword(password), role, form.rate, now(),
+      `INSERT INTO users (email, name, password_hash, role, hourly_rate_cents, tablet_only, must_change_password, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+      form.email, form.name, hashPassword(password), role, form.rate, form.tabletOnly, now(),
     );
     res.send(peoplePage(req, role, await welcomeNotice(req, { name: form.name, email: form.email, role }, password)));
   };
@@ -347,6 +348,8 @@ router.get(['/workers/:id', '/admins/:id'], (req, res) => {
 ${isAdmin ? '' : `<label>Hourly rate ($)<input name="rate" inputmode="decimal" required value="${(u.hourly_rate_cents / 100).toFixed(2)}"></label>
 <label>Lab rate ($), only for someone paid differently for lab work<input name="lab_rate" inputmode="decimal" placeholder="Leave empty for one rate" value="${u.lab_rate_cents == null ? '' : (u.lab_rate_cents / 100).toFixed(2)}"></label>
 <p class="muted small">With a lab rate, they choose “lab work” or “other work” each time they clock in, and you can change it on a shift before approving it. A new rate applies to pay runs created from now on.</p>`}
+${isAdmin ? '' : `<label class="check"><input type="checkbox" name="tablet_only" ${u.tablet_only ? 'checked' : ''}> Can only clock in and out on the crew tablet</label>
+<p class="muted small">Leave this off for someone who sometimes works remotely. Either way they can log in on their own phone to see their hours and set up their bank.</p>`}
 <label class="check"><input type="checkbox" name="active" ${u.active ? 'checked' : ''} ${self ? 'disabled' : ''}> Active (can log in)</label>
 <div class="row"><button>Save</button><a href="${listUrl(u.role)}">Cancel</a></div>
 </form>
@@ -367,8 +370,9 @@ router.post(['/workers/:id', '/admins/:id'], (req, res) => {
   const active = u.id === req.user.id || req.body.active ? 1 : 0;
   const rate = u.role === 'worker' ? form.rate : u.hourly_rate_cents;
   const labRate = u.role === 'worker' ? form.labRate : u.lab_rate_cents;
-  run('UPDATE users SET name = ?, email = ?, hourly_rate_cents = ?, lab_rate_cents = ?, active = ? WHERE id = ?',
-    form.name, form.email, rate, labRate, active, u.id);
+  const tabletOnly = u.role === 'worker' ? form.tabletOnly : u.tablet_only;
+  run('UPDATE users SET name = ?, email = ?, hourly_rate_cents = ?, lab_rate_cents = ?, tablet_only = ?, active = ? WHERE id = ?',
+    form.name, form.email, rate, labRate, tabletOnly, active, u.id);
   if (!active) run('DELETE FROM sessions WHERE user_id = ?', u.id);
   go(res, listUrl(u.role), 'Saved.');
 });

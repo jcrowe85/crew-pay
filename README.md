@@ -72,6 +72,9 @@ a 4-digit PIN. Workers choose the PIN along with their password at first login; 
 password once on the tablet to choose it. Clocking in or out logs them out again, and
 an untouched screen logs out after a minute.
 
+To stop someone clocking in from anywhere else, tick "Can only clock in and out on the crew tablet" on their page
+under Workers. They can still log in on their own phone to see their hours and set up their bank, but not to clock.
+
 A PIN only works on a tablet set up this way, and only for the clock: bank details and passwords still need the email
 and password login on the worker's own phone. Five wrong PINs clears the PIN until the password is used to pick a new
 one. Resetting someone's password clears their PIN too. To shut out a lost tablet, open Workers

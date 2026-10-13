@@ -12,6 +12,11 @@ router.use(requireLogin);
 
 const baseUrl = (req) => process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
 
+// Someone marked tablet-only can still log in anywhere to see their hours and set up their bank,
+// but the clock itself only works on a crew kiosk.
+const offTablet = (req) => Boolean(req.user.tablet_only && !req.kiosk);
+const TABLET_ONLY = 'Clock in and out on the crew tablet.';
+
 function payoutPanel(req) {
   const u = req.user;
   if (!payments.enabled || u.payouts_enabled) return '';
@@ -55,23 +60,24 @@ router.get('/clock', async (req, res) => {
   const workLabel = (e) => (e.lab ? 'Lab work' : 'Other work');
 
   const tz = process.env.TZ;
+  const locked = offTablet(req);
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
   const clock = open
     ? `<section class="card hero on">
 <span class="eyebrow"><span class="dot"></span>On the clock${twoRates ? ` · ${workLabel(open)}` : ''}</span>
 <div class="time" data-since="${open.clock_in}">${esc(fmtMinutes(Math.floor((now() - open.clock_in) / 60)))}</div>
 <p class="sub">Started ${esc(fmtDateTime(open.clock_in))}</p>
-<form method="post" action="/clock/out">${csrf(req)}
+${locked ? `<p class="sub">${TABLET_ONLY}</p>` : `<form method="post" action="/clock/out">${csrf(req)}
 <label>Note (optional)<input name="note" maxlength="200" placeholder="What you worked on"></label>
-<button class="big stop">Clock out</button></form>
+<button class="big stop">Clock out</button></form>`}
 </section>`
     : `<section class="card hero">
 <span class="eyebrow"><span class="dot"></span>Off the clock</span>
 <div class="time" data-now="${esc(tz)}">${esc(new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))}</div>
 <p class="sub">${esc(today)}</p>
-<form method="post" action="/clock/in">${csrf(req)}${twoRates
+${locked ? `<p class="sub">${TABLET_ONLY}</p>` : `<form method="post" action="/clock/in">${csrf(req)}${twoRates
     ? '<button class="big" name="lab" value="1">Start lab work</button><button class="big" name="lab" value="0">Start other work</button>'
-    : '<button class="big">Clock in</button>'}</form>
+    : '<button class="big">Clock in</button>'}</form>`}
 </section>`;
   const done = req.session.kiosk
     ? `<form method="post" action="/logout" class="kiosk-done">${csrf(req)}<button class="big secondary">Done, log me out</button></form>`
@@ -105,6 +111,7 @@ function clocked(req, res, what) {
 }
 
 router.post('/clock/in', (req, res) => {
+  if (offTablet(req)) return go(res, '/clock', TABLET_ONLY, true);
   const twoRates = req.user.lab_rate_cents != null;
   if (twoRates && !['0', '1'].includes(req.body.lab)) return go(res, '/clock', 'Choose lab work or other work.', true);
   const lab = twoRates && req.body.lab === '1' ? 1 : 0;
@@ -118,6 +125,7 @@ router.post('/clock/in', (req, res) => {
 });
 
 router.post('/clock/out', (req, res) => {
+  if (offTablet(req)) return go(res, '/clock', TABLET_ONLY, true);
   const note = String(req.body.note || '').trim().slice(0, 200) || null;
   const result = run(
     'UPDATE time_entries SET clock_out = ?, note = ? WHERE user_id = ? AND clock_out IS NULL',

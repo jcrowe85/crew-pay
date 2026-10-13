@@ -90,6 +90,8 @@ addColumn('users', 'pin_fails', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('sessions', 'kiosk', 'INTEGER NOT NULL DEFAULT 0');
 // A worker with a lab rate is paid it for shifts marked as lab work and their normal rate for the rest.
 addColumn('users', 'lab_rate_cents', 'INTEGER');
+// This worker can only clock in and out on a crew kiosk, not from their own phone.
+addColumn('users', 'tablet_only', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('time_entries', 'lab', 'INTEGER NOT NULL DEFAULT 0');
 // How much of a pay run item's minutes were lab work, and the rate they were paid at.
 addColumn('pay_run_items', 'lab_minutes', 'INTEGER NOT NULL DEFAULT 0');
