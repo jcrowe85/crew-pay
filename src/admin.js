@@ -5,7 +5,7 @@ const mailer = require('./mailer');
 const {
   runItems, markItemPaid, sending, sendRun, pendingTopup, payableCents, pullFunds, stopAutoSend, checkFunding,
 } = require('./payout');
-const { requireAdmin, hashPassword, tempPassword } = require('./auth');
+const { requireAdmin, hashPassword, tempPassword, registerKiosk, unregisterKiosk, unregisterOtherKiosks } = require('./auth');
 const { csrf, page, badge, table, person, stat, icon } = require('./views');
 const {
   esc, money, fmtMinutes, fmtDateTime, fmtDate, fmtRange, now, toInputValue, fromInputValue,
@@ -179,6 +179,21 @@ function payoutStatus(u) {
   return u.stripe_account_id ? badge('incomplete') : '<span class="muted">not set up</span>';
 }
 
+// Turning a shared tablet into a crew kiosk, from the tablet itself.
+function kioskCard(req) {
+  const others = get('SELECT COUNT(*) AS n FROM kiosks').n - (req.kiosk ? 1 : 0);
+  return `<section class="card split">
+<div><h2>Shared tablet</h2>
+<p class="muted">${req.kiosk
+    ? 'This device is a crew kiosk. Log out and it shows every worker; they tap their name and enter a 4-digit PIN.'
+    : 'Log in here on the crew tablet and turn this on. Logged out, it then shows every worker; they tap their name and enter a 4-digit PIN.'}</p></div>
+<div class="actions">${req.kiosk
+    ? post(req, '/admin/kiosk/off', 'Stop using this device as a kiosk', 'secondary')
+    : post(req, '/admin/kiosk/on', 'Use this device as the crew kiosk', '')}
+${others > 0 ? post(req, '/admin/kiosk/off-all', `Turn off ${others} other kiosk${others === 1 ? '' : 's'}`, 'secondary') : ''}</div>
+</section>`;
+}
+
 function peoplePage(req, role, notice = '') {
   const isAdmin = role === 'admin';
   const users = all('SELECT * FROM users WHERE role = ? ORDER BY active DESC, name', role);
@@ -191,6 +206,7 @@ function peoplePage(req, role, notice = '') {
   return page(req, isAdmin ? 'Admins' : 'Workers', `
 ${notice}
 ${table(headers, rows, isAdmin ? 'No admins yet.' : 'No workers yet. Use the Add worker button to add the first one.')}
+${isAdmin ? '' : kioskCard(req)}
 <dialog id="add-person" class="modal" aria-labelledby="add-person-title">
 <form method="post" action="${listUrl(role)}" class="stack">${csrf(req)}
 <div class="modal-head"><h2 id="add-person-title">${isAdmin ? 'Add an admin' : 'Add a worker'}</h2>
@@ -233,6 +249,19 @@ ${passwordNotice(person.name, person.email, password)}`;
 }
 
 router.get('/workers', (req, res) => res.send(peoplePage(req, 'worker')));
+
+router.post('/kiosk/on', (req, res) => {
+  if (!req.kiosk) registerKiosk(req, res);
+  go(res, '/admin/workers', 'This device is now the crew kiosk. Log out to show the crew screen.');
+});
+router.post('/kiosk/off', (req, res) => {
+  unregisterKiosk(req, res);
+  go(res, '/admin/workers', 'This device is no longer a kiosk.');
+});
+router.post('/kiosk/off-all', (req, res) => {
+  unregisterOtherKiosks(req);
+  go(res, '/admin/workers', 'The other kiosks are turned off.');
+});
 router.get('/admins', (req, res) => res.send(peoplePage(req, 'admin')));
 
 // Returns { name, email, rate } or a string describing what is wrong. Only workers have a rate.
@@ -318,7 +347,8 @@ router.post(['/workers/:id/reset-password', '/admins/:id/reset-password'], (req,
   const u = get('SELECT * FROM users WHERE id = ?', req.params.id);
   if (!u) return go(res, '/admin/workers', 'No such person.', true);
   const password = tempPassword();
-  run('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?', hashPassword(password), u.id);
+  // The PIN goes too, so a reset fully locks out whoever knew the old login.
+  run('UPDATE users SET password_hash = ?, must_change_password = 1, pin_hash = NULL, pin_fails = 0 WHERE id = ?', hashPassword(password), u.id);
   if (u.id !== req.user.id) run('DELETE FROM sessions WHERE user_id = ?', u.id);
   res.send(peoplePage(req, u.role, passwordNotice(u.name, u.email, password)));
 });

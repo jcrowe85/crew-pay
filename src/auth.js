@@ -3,6 +3,8 @@ const { get, run } = require('./db');
 const { now, go } = require('./util');
 
 const SESSION_DAYS = 14;
+const KIOSK_SESSION_MINUTES = 15; // a PIN login on the shared tablet
+const KIOSK_DAYS = 365;
 const MIN_PASSWORD = 10;
 
 function hashPassword(password) {
@@ -38,14 +40,15 @@ function cookieOptions(req) {
   };
 }
 
-function startSession(req, res, userId) {
+function startSession(req, res, userId, kiosk = false) {
   run('DELETE FROM sessions WHERE expires_at < ?', now());
   const token = randomToken();
+  const seconds = kiosk ? KIOSK_SESSION_MINUTES * 60 : SESSION_DAYS * 86400;
   run(
-    'INSERT INTO sessions (id, user_id, csrf, expires_at) VALUES (?, ?, ?, ?)',
-    sha256(token), userId, randomToken(16), now() + SESSION_DAYS * 86400,
+    'INSERT INTO sessions (id, user_id, csrf, expires_at, kiosk) VALUES (?, ?, ?, ?, ?)',
+    sha256(token), userId, randomToken(16), now() + seconds, kiosk ? 1 : 0,
   );
-  res.cookie('sid', token, cookieOptions(req));
+  res.cookie('sid', token, { ...cookieOptions(req), maxAge: seconds * 1000 });
 }
 
 function endSession(req, res) {
@@ -61,12 +64,31 @@ function readCookie(req, name) {
   return null;
 }
 
+// Marks this device as a crew kiosk: logged out, it shows everyone's name and takes a PIN.
+function registerKiosk(req, res) {
+  const token = randomToken();
+  run('INSERT INTO kiosks (id, created_by, created_at) VALUES (?, ?, ?)', sha256(token), req.user.id, now());
+  res.cookie('kiosk', token, { ...cookieOptions(req), maxAge: KIOSK_DAYS * 86400 * 1000 });
+}
+
+function unregisterKiosk(req, res) {
+  const token = readCookie(req, 'kiosk');
+  if (token) run('DELETE FROM kiosks WHERE id = ?', sha256(token));
+  res.clearCookie('kiosk', { path: '/' });
+}
+
+// For a lost or replaced tablet: every kiosk except the device in hand stops working.
+const unregisterOtherKiosks = (req) => run('DELETE FROM kiosks WHERE id != ?', sha256(readCookie(req, 'kiosk') || ''));
+
 function loadUser(req, res, next) {
+  const kiosk = readCookie(req, 'kiosk');
+  req.kiosk = Boolean(kiosk && get('SELECT 1 FROM kiosks WHERE id = ?', sha256(kiosk)));
   const token = readCookie(req, 'sid');
   if (token) {
     const session = get('SELECT * FROM sessions WHERE id = ? AND expires_at > ?', sha256(token), now());
     const user = session && get('SELECT * FROM users WHERE id = ? AND active = 1', session.user_id);
-    if (user) {
+    // A PIN session only counts on a device that is still a kiosk.
+    if (user && (!session.kiosk || req.kiosk)) {
       req.session = session;
       req.user = user;
     }
@@ -85,6 +107,8 @@ function checkCsrf(req, res, next) {
 
 function requireLogin(req, res, next) {
   if (!req.user) return res.redirect('/login');
+  // PIN sessions are for the clock only; passwords are changed on the person's own device.
+  if (req.session.kiosk) return next();
   if (req.user.must_change_password && req.path !== '/account/password' && req.path !== '/logout') {
     return go(res, '/account/password', 'Choose your own password to continue.');
   }
@@ -93,7 +117,15 @@ function requireLogin(req, res, next) {
 
 function requireAdmin(req, res, next) {
   requireLogin(req, res, () => {
-    if (req.user.role !== 'admin') return res.status(403).send('Admins only.');
+    if (req.user.role !== 'admin' || req.session.kiosk) return res.status(403).send('Admins only.');
+    next();
+  });
+}
+
+// For pages that need the person's password behind them, not just a PIN.
+function requirePassword(req, res, next) {
+  requireLogin(req, res, () => {
+    if (req.session.kiosk) return go(res, '/clock', 'Log in with your email and password on your own phone to do that.', true);
     next();
   });
 }
@@ -115,5 +147,5 @@ const loginSucceeded = (ip) => failures.delete(ip);
 
 module.exports = {
   MIN_PASSWORD, hashPassword, verifyPassword, tempPassword, startSession, endSession,
-  loadUser, checkCsrf, requireLogin, requireAdmin, loginBlocked, loginFailed, loginSucceeded,
+  registerKiosk, unregisterKiosk, unregisterOtherKiosks, loadUser, checkCsrf, requireLogin, requireAdmin, requirePassword, loginBlocked, loginFailed, loginSucceeded,
 };

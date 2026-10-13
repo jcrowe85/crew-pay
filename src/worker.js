@@ -1,7 +1,7 @@
 const express = require('express');
 const { get, all, run } = require('./db');
 const payments = require('./payments');
-const { requireLogin } = require('./auth');
+const { requireLogin, requirePassword, endSession } = require('./auth');
 const { csrf, page, badge, table, stat } = require('./views');
 const {
   esc, money, fmtMinutes, fmtDateTime, fmtDate, fmtRange, now, entryMinutes, payCents, go,
@@ -15,6 +15,12 @@ const baseUrl = (req) => process.env.BASE_URL || `${req.protocol}://${req.get('h
 function payoutPanel(req) {
   const u = req.user;
   if (!payments.enabled || u.payouts_enabled) return '';
+  if (req.session.kiosk) {
+    return `<section class="card warn">
+<h2>Set up direct deposit</h2>
+<p>To be paid, add your bank details from your own phone: open ${esc(baseUrl(req).replace(/^https?:\/\//, ''))} and log in with your email and password.</p>
+</section>`;
+  }
   return `<section class="card warn split">
 <div><h2>Set up direct deposit</h2>
 <p>Add your bank details with Stripe, our payment processor, so you can be paid. It takes a few minutes.</p></div>
@@ -51,6 +57,9 @@ router.get('/clock', (req, res) => {
 <p class="sub">${esc(today)}</p>
 <form method="post" action="/clock/in">${csrf(req)}<button class="big">Clock in</button></form>
 </section>`;
+  const done = req.session.kiosk
+    ? `<form method="post" action="/logout" class="kiosk-done">${csrf(req)}<button class="big secondary">Done, log me out</button></form>`
+    : '';
 
   const rows = recent.map((e) => [
     esc(fmtDateTime(e.clock_in)), esc(fmtDateTime(e.clock_out)), esc(fmtMinutes(entryMinutes(e))),
@@ -59,6 +68,7 @@ router.get('/clock', (req, res) => {
 
   res.send(page(req, `Hi, ${u.name.split(' ')[0]}`, `
 ${clock}
+${done}
 ${payoutPanel(req)}
 <section class="stat-grid three">
 ${stat({ label: 'Unpaid hours', value: esc(fmtMinutes(unpaidMinutes)), hint: 'Worked and not yet paid', iconName: 'clock', tone: 'blue' })}
@@ -70,6 +80,14 @@ ${table(['In', 'Out', 'Time', 'Status', 'Note'], rows, 'No shifts yet. Clock in 
     { lead: 'Track your time and see what you are owed.' }));
 });
 
+// On the shared tablet clocking in or out is the whole visit, so it also logs the person out.
+function clocked(req, res, what) {
+  if (!req.session.kiosk) return go(res, '/clock', `${what}.`);
+  const time = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  endSession(req, res);
+  go(res, '/login', `${req.user.name} ${what.toLowerCase()} at ${time}.`);
+}
+
 router.post('/clock/in', (req, res) => {
   try {
     run('INSERT INTO time_entries (user_id, clock_in) VALUES (?, ?)', req.user.id, now());
@@ -77,7 +95,7 @@ router.post('/clock/in', (req, res) => {
     if (String(err.message).includes('UNIQUE')) return go(res, '/clock', 'You are already clocked in.', true);
     throw err;
   }
-  go(res, '/clock', 'Clocked in.');
+  clocked(req, res, 'Clocked in');
 });
 
 router.post('/clock/out', (req, res) => {
@@ -86,7 +104,8 @@ router.post('/clock/out', (req, res) => {
     'UPDATE time_entries SET clock_out = ?, note = ? WHERE user_id = ? AND clock_out IS NULL',
     now(), note, req.user.id,
   );
-  go(res, '/clock', result.changes ? 'Clocked out.' : 'You were not clocked in.', !result.changes);
+  if (!result.changes) return go(res, '/clock', 'You were not clocked in.', true);
+  clocked(req, res, 'Clocked out');
 });
 
 router.get('/pay', (req, res) => {
@@ -105,7 +124,7 @@ router.get('/pay', (req, res) => {
     { lead: 'Every pay run you have been part of.' }));
 });
 
-router.post('/payouts/onboard', async (req, res) => {
+router.post('/payouts/onboard', requirePassword, async (req, res) => {
   if (!payments.enabled) return go(res, '/clock', 'Direct deposit is not available yet.', true);
   res.redirect(await payments.onboardingLink(req.user, baseUrl(req)));
 });

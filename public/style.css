@@ -245,6 +245,28 @@ body.auth h1 { font-size: 22px; margin-bottom: 20px; }
 body.auth .stack button { width: 100%; padding: 13px; }
 .brand.big { justify-content: center; font-size: 26px; }
 .brand.big .logo { width: 42px; height: 42px; }
+body.auth .back { margin: 18px 0 0; text-align: center; font-size: 14.5px; }
+
+/* ---------- Shared tablet: crew screen and PIN pad ---------- */
+body.auth.wide main { max-width: 980px; }
+body.auth.wide .card { padding: 30px; }
+body.auth.wide h1 { font-size: 26px; text-align: center; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px; }
+.tile { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; padding: 22px 12px 18px; text-align: center; color: var(--text); background: var(--bg); border: 2px solid transparent; border-radius: 18px; transition: transform 0.12s, background 0.12s, border-color 0.12s; }
+.tile:hover, .tile:active { text-decoration: none; background: var(--brand-soft); border-color: var(--brand); transform: translateY(-2px); }
+.tile .avatar { width: 84px; height: 84px; font-size: 28px; margin-bottom: 8px; }
+.tile strong { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
+.tile small { max-width: 100%; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile .on-clock { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 12.5px; font-weight: 500; color: var(--ok); }
+.tile .on-clock .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.pin-who { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 18px; font-size: 19px; }
+.pin-who .avatar { width: 84px; height: 84px; font-size: 28px; }
+.pin-form { display: grid; gap: 18px; justify-items: center; }
+input.pin { width: 200px; padding: 12px; text-align: center; font-size: 34px; letter-spacing: 0.4em; text-indent: 0.4em; }
+.keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; width: 100%; max-width: 320px; }
+.keypad button { padding: 0; height: 68px; font-size: 26px; font-weight: 500; border-radius: 16px; touch-action: manipulation; }
+.keypad button[data-key="clear"] { font-size: 15px; color: var(--muted); }
+.kiosk-done { margin: 0 0 18px; }
 
 /* ---------- Narrower screens ---------- */
 @media (max-width: 1180px) {

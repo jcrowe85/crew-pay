@@ -82,7 +82,18 @@ addColumn('users', 'avatar', 'TEXT');
 // auto_send: an admin confirmed this run and it goes out as soon as the bank pull lands.
 addColumn('pay_runs', 'auto_send', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('pay_runs', 'funding_note', 'TEXT');
+// The shared crew tablet: a 4-digit PIN per worker, and sessions started with one.
+addColumn('users', 'pin_hash', 'TEXT');
+addColumn('users', 'pin_fails', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('sessions', 'kiosk', 'INTEGER NOT NULL DEFAULT 0');
 db.exec(`
+  -- Devices an admin has set up as a crew kiosk. The id is the hash of the device's cookie.
+  CREATE TABLE IF NOT EXISTS kiosks (
+    id TEXT PRIMARY KEY,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL
+  );
+
   -- Money pulled from the business bank account into the Stripe balance to cover a pay run.
   CREATE TABLE IF NOT EXISTS topups (
     id INTEGER PRIMARY KEY,

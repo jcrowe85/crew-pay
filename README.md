@@ -49,6 +49,19 @@ account saved in Stripe (an ACH debit that takes a few business days). The pay r
 automatically when the money lands; the app checks every ten minutes. If the balance already covers the run, nothing is
 pulled and payments go out straight away. A failed pull sends nothing and is reported on the pay run page.
 
+## Shared tablet (kiosk)
+
+For a crew that clocks in on one shared tablet: log in on the tablet as an admin, open Workers and choose
+"Use this device as the crew kiosk", then log out. The tablet now shows every worker. Each taps their name and enters
+a 4-digit PIN. Workers choose the PIN along with their password at first login; anyone without one enters their
+password once on the tablet to choose it. Clocking in or out logs them out again, and
+an untouched screen logs out after a minute.
+
+A PIN only works on a tablet set up this way, and only for the clock: bank details and passwords still need the email
+and password login on the worker's own phone. Five wrong PINs clears the PIN until the password is used to pick a new
+one. Resetting someone's password clears their PIN too. To shut out a lost tablet, open Workers
+on any other device and choose "Turn off other kiosks".
+
 ## Welcome emails
 
 When `RESEND_API_KEY` and `EMAIL_FROM` are set in `.env`, adding a worker or admin emails them their username and a

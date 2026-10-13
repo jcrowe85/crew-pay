@@ -52,13 +52,14 @@ function nav(req) {
       ['/clock', 'Clock', 'clock', path === '/clock'],
       ['/pay', 'Pay', 'wallet', path === '/pay'],
     ];
-  links.push(['/account/password', 'Password', 'key', path === '/account/password']);
+  if (!req.session.kiosk) links.push(['/account/password', 'Password', 'key', path === '/account/password']);
   return `<nav>${links.map(([href, label, name, current]) =>
     `<a href="${href}"${current ? ' class="current" aria-current="page"' : ''}>${icon(name)}<span>${label}</span></a>`).join('')}</nav>`;
 }
 
 // opts.lead: escaped HTML under the title. opts.action: HTML shown to the right of the title.
-function page(req, title, body, { lead = '', action = '' } = {}) {
+// Logged-out pages: opts.wide gives the full-width layout, opts.idle returns to /login after that many idle seconds.
+function page(req, title, body, { lead = '', action = '', wide = false, idle = 0 } = {}) {
   const user = req.user;
   const msg = req.query?.msg
     ? `<p class="flash ${req.query.err ? 'error' : ''}" role="status">${esc(req.query.msg)}</p>`
@@ -77,7 +78,7 @@ function page(req, title, body, { lead = '', action = '' } = {}) {
 
   if (!user) {
     return `${head}
-<body class="auth">
+<body class="auth${wide ? ' wide' : ''}"${idle ? ` data-idle="${idle}"` : ''}>
 <main>
   <div class="brand big">${LOGO}<span>Crew Pay</span></div>
   <section class="card">
@@ -92,8 +93,9 @@ function page(req, title, body, { lead = '', action = '' } = {}) {
   }
 
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  // On the shared tablet a forgotten login is closed for the next person.
   return `${head}
-<body>
+<body${req.session.kiosk ? ' data-idle="60"' : ''}>
 <aside class="side">
   <a class="brand" href="/">${LOGO}<span>Crew Pay</span></a>
   ${nav(req)}

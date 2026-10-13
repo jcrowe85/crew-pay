@@ -8,6 +8,7 @@ const { get, run } = require('./src/db');
 const auth = require('./src/auth');
 const { csrf, page, avatar } = require('./src/views');
 const avatars = require('./src/avatars');
+const kiosk = require('./src/kiosk');
 const { esc, now, go } = require('./src/util');
 
 const app = express();
@@ -68,12 +69,14 @@ app.post('/setup', (req, res) => {
 app.get('/login', (req, res) => {
   if (req.user) return res.redirect(home(req.user));
   if (!hasUsers()) return res.redirect('/setup');
+  const wantsForm = 'form' in req.query || 'email' in req.query;
+  if (req.kiosk && !wantsForm) return res.send(kiosk.grid(req));
   res.send(page(req, 'Log in', `
 <form method="post" action="/login" class="stack">
 <label>Email<input type="email" name="email" required autocomplete="username" value="${esc(req.query.email)}"></label>
 <label>Password<input type="password" name="password" required autocomplete="current-password"></label>
 <button>Log in</button>
-</form>`));
+</form>${req.kiosk ? '<p class="back"><a href="/login">Back to the crew screen</a></p>' : ''}`));
 });
 
 app.post('/login', (req, res) => {
@@ -95,17 +98,25 @@ app.post('/logout', (req, res) => {
 });
 
 // Someone on a temporary password has just logged in with it, so they are not asked for it again.
-app.get('/account/password', auth.requireLogin, (req, res) => {
+app.get('/account/password', auth.requirePassword, (req, res) => {
   const first = Boolean(req.user.must_change_password);
-  res.send(page(req, first ? 'Choose your password' : 'Change password', `
+  // Workers pick their tablet PIN along with their first password.
+  const withPin = first && req.user.role === 'worker';
+  res.send(page(req, first ? (withPin ? 'Choose your password and PIN' : 'Choose your password') : 'Change password', `
 <form method="post" action="/account/password" class="stack">${csrf(req)}
 ${first ? '' : '<label>Current password<input type="password" name="current" required autocomplete="current-password"></label>'}
 <label>New password (at least ${auth.MIN_PASSWORD} characters)<input type="password" name="password" required minlength="${auth.MIN_PASSWORD}" autocomplete="new-password"></label>
-<button>Save password</button>
-</form>`, first ? { lead: 'Pick a password only you know. You will use it from now on.' } : {}));
+${withPin ? `<label>PIN (4 digits)<input type="password" name="pin" inputmode="numeric" pattern="\\d{4}" maxlength="4" required autocomplete="off"></label>
+<label>PIN again<input type="password" name="pin2" inputmode="numeric" pattern="\\d{4}" maxlength="4" required autocomplete="off"></label>` : ''}
+<button>${withPin ? 'Save password and PIN' : 'Save password'}</button>
+</form>`, first ? {
+    lead: withPin
+      ? 'Pick a password only you know, and a 4-digit PIN for fast log in on the crew tablet.'
+      : 'Pick a password only you know. You will use it from now on.',
+  } : {}));
 });
 
-app.post('/account/password', auth.requireLogin, (req, res) => {
+app.post('/account/password', auth.requirePassword, (req, res) => {
   const password = String(req.body.password || '');
   if (!req.user.must_change_password && !auth.verifyPassword(String(req.body.current || ''), req.user.password_hash)) {
     return go(res, '/account/password', 'Current password is wrong.', true);
@@ -115,6 +126,11 @@ app.post('/account/password', auth.requireLogin, (req, res) => {
   }
   if (auth.verifyPassword(password, req.user.password_hash)) {
     return go(res, '/account/password', 'Choose a password different from your current one.', true);
+  }
+  if (req.user.must_change_password && req.user.role === 'worker') {
+    const pin = String(req.body.pin || '');
+    if (!kiosk.isPin(pin) || pin !== req.body.pin2) return go(res, '/account/password', 'Enter the same 4 digits in both PIN boxes.', true);
+    run('UPDATE users SET pin_hash = ?, pin_fails = 0 WHERE id = ?', auth.hashPassword(pin), req.user.id);
   }
   run('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?', auth.hashPassword(password), req.user.id);
   // Log out every other device.
@@ -147,6 +163,7 @@ app.post('/account/avatar', auth.requireLogin, (req, res) => {
 });
 
 app.use('/admin', require('./src/admin'));
+app.use('/kiosk', kiosk.router);
 app.use('/', require('./src/worker'));
 
 app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars

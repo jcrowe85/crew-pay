@@ -28,3 +28,37 @@ document.addEventListener('click', (event) => {
   // A click on the dimmed area around the box closes it.
   if (event.target instanceof HTMLDialogElement) event.target.close();
 });
+
+// PIN pad on the shared tablet: big keys fill the box, and the fourth digit sends it.
+(function () {
+  const form = document.querySelector('[data-pin]');
+  if (!form) return;
+  const input = form.querySelector('input.pin');
+  input.readOnly = true; // keeps the tablet's own keyboard out of the way
+  form.addEventListener('click', (event) => {
+    const key = event.target.closest('[data-key]')?.dataset.key;
+    if (!key) return;
+    if (key === 'clear') input.value = '';
+    else if (key === 'back') input.value = input.value.slice(0, -1);
+    else if (input.value.length < 4) input.value += key;
+    if (input.value.length === 4) form.submit();
+  });
+})();
+
+// Shared tablet: after [data-idle] seconds without a touch, log out and go back to the crew screen.
+(function () {
+  const seconds = Number(document.body.dataset.idle);
+  if (!seconds) return;
+  let timer;
+  function leave() {
+    const logout = document.querySelector('form[action="/logout"]');
+    if (logout) logout.submit();
+    else location.href = '/login';
+  }
+  function reset() {
+    clearTimeout(timer);
+    timer = setTimeout(leave, seconds * 1000);
+  }
+  ['pointerdown', 'keydown', 'scroll'].forEach((type) => addEventListener(type, reset, { passive: true }));
+  reset();
+})();
