@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server.js",
-    "dev": "node --disable-warning=ExperimentalWarning --watch server.js"
+    "dev": "node --disable-warning=ExperimentalWarning --watch server.js",
+    "dev:secrets": "infisical run --env=prod --silent -- sh -c 'STRIPE_SECRET_KEY=$STRIPE_API_KEY EMAIL_FROM=$RESEND_FROM_EMAIL npm run dev'"
   },
   "engines": {
     "node": ">=22.13"
