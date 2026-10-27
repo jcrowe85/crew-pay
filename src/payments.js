@@ -121,7 +121,30 @@ function createTopup({ runId, amountCents, attempt }) {
 
 const retrieveTopup = (id) => stripe.topups.retrieve(id);
 
+// STRIPE_REFILL_TO, in dollars: the balance to top back up to after money goes out (see refill.js).
+const refillTargetCents = Math.round(Number(process.env.STRIPE_REFILL_TO || 0) * 100) || 0;
+
+const recentTopups = async () => (await stripe.topups.list({ limit: 20 })).data;
+
+function createRefill(amountCents, attempt) {
+  const day = new Date().toISOString().slice(0, 10);
+  return stripe.topups.create(
+    {
+      amount: amountCents,
+      currency: 'usd',
+      description: 'Crew Pay refill',
+      statement_descriptor: 'Crew Pay',
+      metadata: { crewpay: 'refill' },
+      ...(process.env.STRIPE_TOPUP_SOURCE ? { source: process.env.STRIPE_TOPUP_SOURCE } : {}),
+    },
+    // Two copies of the app checking at once get the same pull back instead of starting two.
+    { idempotencyKey: `crewpay-refill-${day}-${amountCents}-${attempt}` },
+  );
+}
+
+const tagTopup = (id, metadata) => stripe.topups.update(id, { metadata });
+
 module.exports = {
   enabled, autoTopup, onboardingLink, refreshStatus, refreshIfWaiting, refreshAllWaiting, sendTransfer, isDefinitiveFailure, availableBalanceCents,
-  createTopup, retrieveTopup,
+  createTopup, retrieveTopup, refillTargetCents, recentTopups, createRefill, tagTopup,
 };

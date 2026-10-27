@@ -178,7 +178,9 @@ if (require.main === module) {
   // The same visit re-checks anyone waiting on Stripe to approve their bank details.
   const { checkFunding } = require('./src/payout');
   const { refreshAllWaiting } = require('./src/payments');
-  const lookIn = () => checkFunding().then(refreshAllWaiting).catch((err) => console.error(err));
+  // With STRIPE_REFILL_TO set, it also tops the Stripe balance back up after money goes out.
+  const refill = require('./src/refill');
+  const lookIn = () => checkFunding().then(refreshAllWaiting).then(() => refill.check()).catch((err) => console.error(err));
   // And makes the day's backup, once, the first time it runs after midnight.
   const backup = require('./src/backup');
   const everyTen = () => {

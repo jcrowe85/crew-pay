@@ -57,6 +57,22 @@ Start with a test key (`sk_test_...`) and run one full pay period before switchi
 Workers need to reach it from their phones, so host it somewhere with HTTPS and a persistent disk for
 `data/`. Set `TRUST_PROXY=1` behind an HTTPS proxy so login cookies are marked secure.
 
+## Keeping the Stripe balance topped up
+
+Set `STRIPE_REFILL_TO` to the dollars to keep in Stripe, for example `2000` (about one week's pay plus some spare).
+After a pay run goes out, the app pulls the difference from the bank account saved in Stripe, so the balance is
+back at that amount before the next payday. A pull takes a few business days. The app checks every ten minutes and
+only pulls one at a time, and the dashboard shows what is on its way.
+
+Before switching it on:
+
+1. Add the starting amount by hand once (Stripe Dashboard, Balance > Add to balance > Payments balance).
+2. In Stripe, Settings > Payouts: if Fleur's own payouts are automatic, set the minimum balance to at least this
+   amount, or Stripe sends the money it pulled straight back to the bank.
+
+If a pull fails, refills pause and every admin gets an email. Fix the bank in Stripe, then choose
+"Try the refill again" on the dashboard.
+
 ## Automatic bank pulls
 
 With `STRIPE_AUTO_TOPUP=1`, confirming a pay run that the Stripe balance cannot cover pulls the difference from the bank

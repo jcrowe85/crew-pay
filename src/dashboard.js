@@ -1,8 +1,9 @@
 // Admin dashboard: headline numbers, hours by week, shift status and recent activity.
 const { get, all } = require('./db');
 const payments = require('./payments');
-const { page, badge, table, person, stat, icon } = require('./views');
-const { esc, money, fmtMinutes, fmtDateTime, fmtRange, now, entryMinutes, payCents, entryRate, splitPay, LAB_MINUTES } = require('./util');
+const refill = require('./refill');
+const { page, badge, table, person, stat, icon, csrf } = require('./views');
+const { esc, money, fmtMinutes, fmtDateTime, fmtDate, fmtRange, now, entryMinutes, payCents, entryRate, splitPay, LAB_MINUTES } = require('./util');
 
 const WEEKS = 12;
 const MINUTES = 'CAST(ROUND((e.clock_out - e.clock_in) / 60.0) AS INTEGER)';
@@ -97,12 +98,28 @@ ${parts.map(([key, label]) => `<a class="pill-row" href="/admin?status=${key}"><
 </section>`;
 }
 
-function accountCard() {
+// What the automatic refill is doing, from the app's newest check.
+function refillLine(req) {
+  const r = refill.status();
+  const keeps = `Keeps ${esc(money(refill.target))} in Stripe.`;
+  if (!r) return `<p class="muted small">${keeps} Checking the balance…</p>`;
+  if (r.state === 'pulling') {
+    return `<p class="muted small">${keeps} ${esc(money(r.amount))} is on its way from your bank${r.expected ? `, expected by ${esc(fmtDate(r.expected))}` : ''}.</p>`;
+  }
+  if (r.state === 'full') return `<p class="muted small">${keeps} The balance is ${esc(money(r.balance))}, so nothing to pull.</p>`;
+  const why = r.state === 'failed' ? `The last pull of ${money(r.amount)} did not go through (${r.error}).` : `Could not check Stripe: ${r.error}`;
+  return `<p class="small error">${esc(why)} Automatic refills are paused.</p>
+<form method="post" action="/admin/refill/retry">${csrf(req)}<button class="link">Try the refill again</button></form>`;
+}
+
+function accountCard(req) {
+  const how = refill.enabled ? refillLine(req)
+    : `<p class="muted small">${payments.autoTopup ? 'Pay runs pull any shortfall from your bank automatically.' : 'Automatic bank pulls are off. Fund the Stripe balance before each pay run.'}</p>`;
   return `<section class="card">
 <div class="card-head"><span class="label">${icon('bank')} Payment account</span></div>
 <h3>Stripe payouts</h3>
 ${payments.enabled
-    ? `<p class="state ok">Connected</p><p class="muted small">${payments.autoTopup ? 'Pay runs pull any shortfall from your bank automatically.' : 'Automatic bank pulls are off. Fund the Stripe balance before each pay run.'}</p>`
+    ? `<p class="state ok">Connected</p>${how}`
     : '<p class="state off">Not connected</p><p class="muted small">Payments are recorded by hand until a Stripe key is added.</p>'}
 </section>`;
 }
@@ -182,7 +199,7 @@ ${stat({ label: 'On the clock now', value: String(onClock), hint: `of ${workers}
   </div>
   <div class="dash-side">
     ${statusCard()}
-    ${accountCard()}
+    ${accountCard(req)}
     ${lastRunCard()}
   </div>
 </div>`, {

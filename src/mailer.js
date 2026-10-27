@@ -77,4 +77,4 @@ Keep this email. You only need the file if the server's own data is ever lost; t
   return send({ to, subject: `Crew Pay backup: ${day}`, text, attachments: [{ filename, content }] });
 }
 
-module.exports = { enabled, sendWelcome, sendBackup };
+module.exports = { enabled, send, sendWelcome, sendBackup };
