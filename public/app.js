@@ -62,3 +62,8 @@ document.addEventListener('click', (event) => {
   ['pointerdown', 'keydown', 'scroll'].forEach((type) => addEventListener(type, reset, { passive: true }));
   reset();
 })();
+
+// Pay run dates: show the new totals as soon as a date changes.
+document.querySelectorAll('form[data-autosubmit]').forEach((form) => {
+  form.addEventListener('change', () => { if (form.checkValidity()) form.submit(); });
+});

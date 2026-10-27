@@ -4,6 +4,7 @@ const { get, all, run, tx } = require('./db');
 const payments = require('./payments');
 const mailer = require('./mailer');
 const backup = require('./backup');
+const refill = require('./refill');
 const {
   runItems, markItemPaid, sending, sendRun, pendingTopup, payableCents, pullFunds, stopAutoSend, checkFunding,
 } = require('./payout');
@@ -403,28 +404,57 @@ router.post(['/workers/:id/reset-password', '/admins/:id/reset-password'], (req,
 
 /* ---------- Pay runs ---------- */
 
-const owedByWorker = (through) => all(
+// Approved shifts not yet in a pay run that ended between `from` and `through` (seconds, inclusive).
+const owedByWorker = (from, through) => all(
   `SELECT u.id, u.name, u.avatar, u.hourly_rate_cents, u.lab_rate_cents, MIN(e.clock_in) AS first_in,
           SUM(CAST(ROUND((e.clock_out - e.clock_in) / 60.0) AS INTEGER)) AS minutes, SUM(${LAB_MINUTES}) AS lab_minutes
    FROM time_entries e JOIN users u ON u.id = e.user_id
-   WHERE e.status = 'approved' AND e.pay_run_id IS NULL AND e.clock_out <= ?
-   GROUP BY u.id ORDER BY u.name`, through,
+   WHERE e.status = 'approved' AND e.pay_run_id IS NULL AND e.clock_out >= ? AND e.clock_out <= ?
+   GROUP BY u.id ORDER BY u.name`, from, through,
 );
 const owedCents = (o) => splitPay(o.minutes, o.hourly_rate_cents, o.lab_minutes, o.lab_rate_cents);
 
+const isDay = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value || '') && !Number.isNaN(new Date(`${value}T12:00:00`).getTime());
+function startOfDay(value) {
+  return isDay(value) ? Math.floor(new Date(`${value}T00:00:00`).getTime() / 1000) : null;
+}
 function endOfDay(value) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return null;
-  const t = new Date(`${value}T23:59:59`).getTime();
-  return Number.isNaN(t) ? null : Math.floor(t / 1000);
+  return isDay(value) ? Math.floor(new Date(`${value}T23:59:59`).getTime() / 1000) : null;
+}
+const dayOf = (sec) => toInputValue(sec).slice(0, 10);
+// Moves a YYYY-MM-DD date by whole days, without timezone surprises.
+function addDays(value, days) {
+  const d = new Date(`${value}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// The dates the form starts with: from the oldest unpaid approved shift, through the most recent Sunday.
+function suggestedRange() {
+  const today = dayOf(now());
+  const weekday = new Date(`${today}T12:00:00Z`).getUTCDay(); // 0 is Sunday
+  const to = addDays(today, -(weekday || 7));
+  const oldest = get("SELECT MIN(clock_out) AS t FROM time_entries WHERE status = 'approved' AND pay_run_id IS NULL").t;
+  const from = oldest ? dayOf(oldest) : addDays(to, -6);
+  return { from: from > to ? addDays(to, -6) : from, to };
 }
 
 router.get('/payruns', (req, res) => {
-  const owed = owedByWorker(now());
+  const suggested = suggestedRange();
+  const from = isDay(req.query.from) ? req.query.from : suggested.from;
+  const to = isDay(req.query.to) ? req.query.to : suggested.to;
+  const badRange = from > to;
+  const owed = badRange ? [] : owedByWorker(startOfDay(from), endOfDay(to));
   const total = owed.reduce((sum, o) => sum + owedCents(o), 0);
   const owedRows = owed.map((o) => [
     person(o.name, o.avatar), esc(fmtMinutes(o.minutes)), esc(rateText(o.minutes, o.hourly_rate_cents, o.lab_minutes, o.lab_rate_cents)),
     esc(money(owedCents(o))),
   ]);
+  // Approved shifts these dates leave out, so nobody is forgotten without anyone noticing.
+  const outside = badRange ? 0 : get(
+    `SELECT COUNT(*) AS n FROM time_entries WHERE status = 'approved' AND pay_run_id IS NULL
+     AND (clock_out < ? OR clock_out > ?)`, startOfDay(from), endOfDay(to),
+  ).n;
   const runs = all(
     `SELECT r.*, COUNT(i.id) AS people, COALESCE(SUM(i.amount_cents), 0) AS total
      FROM pay_runs r LEFT JOIN pay_run_items i ON i.pay_run_id = r.id GROUP BY r.id ORDER BY r.id DESC`,
@@ -434,15 +464,26 @@ router.get('/payruns', (req, res) => {
     esc(fmtRange(r.period_start, r.period_end)),
     String(r.people), esc(money(r.total)), badge(r.status),
   ]);
-  const today = toInputValue(now()).slice(0, 10);
+  const rangeText = esc(fmtRange(startOfDay(from), endOfDay(to)));
 
   res.send(page(req, 'Pay runs', `
-<h2>Approved and not yet paid</h2>
-${table(['Worker', 'Time', 'Rate', 'Amount'], owedRows, 'No approved hours are waiting to be paid.')}
+<section class="card">
+<h2>Choose the pay period</h2>
+<form method="get" action="/admin/payruns" class="range-form" data-autosubmit>
+<label>From<input type="date" name="from" value="${esc(from)}" required></label>
+<label>To<input type="date" name="to" value="${esc(to)}" required></label>
+<button class="secondary">Show</button>
+</form>
+<p class="muted small">Includes approved shifts that ended on these days and are not in a pay run yet.</p>
+</section>
+${badRange ? '<p class="flash error" role="status">The From date is after the To date.</p>' : ''}
+<h2>To pay for ${rangeText}</h2>
+${table(['Worker', 'Time', 'Rate', 'Amount'], owedRows, 'No approved hours waiting to be paid in these dates.')}
+${outside ? `<p class="muted small">${outside} approved ${outside === 1 ? 'shift is' : 'shifts are'} outside these dates and ${outside === 1 ? 'is' : 'are'} not included.</p>` : ''}
 ${owed.length ? `<p class="total">Total: ${esc(money(total))}</p>
 <form method="post" action="/admin/payruns" class="stack">${csrf(req)}
-<label>Include approved shifts through<input type="date" name="through" value="${today}" required></label>
-<button>Create pay run</button>
+<input type="hidden" name="from" value="${esc(from)}"><input type="hidden" name="to" value="${esc(to)}">
+<button>Create pay run for ${rangeText}</button>
 </form>
 <p class="muted small">Creating a pay run only locks the hours in for review. No money moves until you send it.</p>` : ''}
 <h2>History</h2>
@@ -450,15 +491,17 @@ ${table(['Run', 'Period', 'People', 'Total', 'Status'], runRows, 'No pay runs ye
 });
 
 router.post('/payruns', (req, res) => {
-  const through = endOfDay(req.body.through);
-  if (!through) return go(res, '/admin/payruns', 'Pick a date.', true);
+  const from = startOfDay(req.body.from);
+  const through = endOfDay(req.body.to);
+  const back = `/admin/payruns?from=${encodeURIComponent(req.body.from || '')}&to=${encodeURIComponent(req.body.to || '')}`;
+  if (!from || !through) return go(res, back, 'Pick both dates.', true);
+  if (from > through) return go(res, back, 'The From date is after the To date.', true);
   const runId = tx(() => {
-    const owed = owedByWorker(through);
+    const owed = owedByWorker(from, through);
     if (!owed.length) return null;
-    const start = Math.min(...owed.map((o) => o.first_in));
     const id = run(
       'INSERT INTO pay_runs (period_start, period_end, created_by, created_at) VALUES (?, ?, ?, ?)',
-      start, through, req.user.id, now(),
+      from, through, req.user.id, now(),
     ).lastInsertRowid;
     for (const o of owed) {
       run(
@@ -468,12 +511,12 @@ router.post('/payruns', (req, res) => {
       );
     }
     run(
-      "UPDATE time_entries SET pay_run_id = ? WHERE status = 'approved' AND pay_run_id IS NULL AND clock_out <= ?",
-      id, through,
+      "UPDATE time_entries SET pay_run_id = ? WHERE status = 'approved' AND pay_run_id IS NULL AND clock_out >= ? AND clock_out <= ?",
+      id, from, through,
     );
     return id;
   });
-  if (!runId) return go(res, '/admin/payruns', 'No approved hours up to that date.', true);
+  if (!runId) return go(res, back, 'No approved hours in those dates.', true);
   res.redirect(`/admin/payruns/${runId}`);
 });
 
@@ -582,7 +625,17 @@ router.post('/payruns/:id/pay', async (req, res) => {
   const result = await sendRun(payRun.id);
   if (!result) return go(res, back, 'This pay run is already being sent.', true);
   stopAutoSend(payRun.id, null);
+  if (result.sent) refill.check(); // not awaited: the refill starts in the background
   go(res, back, `Sent ${result.sent} payment(s)${result.skipped ? `, ${result.skipped} not sent (see below)` : ''}.`, result.skipped > 0);
+});
+
+// After a refill failed: an admin has fixed the bank in Stripe and wants the app to pull again.
+router.post('/refill/retry', async (req, res) => {
+  if (!refill.enabled) return go(res, '/admin/dashboard', 'Automatic refills are not switched on.', true);
+  const result = await refill.check({ retry: true });
+  if (result?.state === 'pulling') return go(res, '/admin/dashboard', `Pulling ${money(result.amount)} from your bank into Stripe.`);
+  if (result?.state === 'full') return go(res, '/admin/dashboard', 'The Stripe balance is already full. Automatic refills are back on.');
+  go(res, '/admin/dashboard', `The refill could not be started: ${result?.error || 'unknown error'}`, true);
 });
 
 // Keeps the money that is on its way but leaves sending to a person.
